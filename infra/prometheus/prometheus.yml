@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # The API and worker run on the host during dev.
+  - job_name: assistant-api
+    static_configs:
+      - targets: ["host.containers.internal:8000"]
+  - job_name: assistant-worker
+    static_configs:
+      - targets: ["host.containers.internal:9101"]
