@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, EmailStr, Field
 
-from assistant.tools.registry import OutboxSpec, Tool, ToolContext
+from assistant.tools.registry import OutboxSpec, Planned, Tool, ToolContext
 
 ALL_CHANNELS = {"web", "telegram", "whatsapp", "internal"}
 
@@ -45,10 +45,10 @@ class SendEmail(Tool):
     channels = {"internal"}
     side_effect = True
 
-    async def plan(self, ctx: ToolContext, args: SendEmailArgs) -> list[OutboxSpec]:
-        return [
-            OutboxSpec("email.send", {"to": args.to, "subject": args.subject, "body": args.body})
-        ]
+    async def plan(self, ctx: ToolContext, args: SendEmailArgs, key: str) -> Planned:
+        return Planned(
+            [OutboxSpec("email.send", {"to": args.to, "subject": args.subject, "body": args.body})]
+        )
 
 
 class NotifyTeamArgs(BaseModel):
@@ -63,17 +63,19 @@ class NotifyTeam(Tool):
     channels = {"internal"}
     side_effect = True
 
-    async def plan(self, ctx: ToolContext, args: NotifyTeamArgs) -> list[OutboxSpec]:
-        return [
-            OutboxSpec(
-                "slack.notify",
-                {
-                    "text": args.message,
-                    "urgency": args.urgency,
-                    "conversation_id": str(ctx.conversation_id),
-                },
-            )
-        ]
+    async def plan(self, ctx: ToolContext, args: NotifyTeamArgs, key: str) -> Planned:
+        return Planned(
+            [
+                OutboxSpec(
+                    "slack.notify",
+                    {
+                        "text": args.message,
+                        "urgency": args.urgency,
+                        "conversation_id": str(ctx.conversation_id),
+                    },
+                )
+            ]
+        )
 
 
 def default_tools() -> list[Tool]:

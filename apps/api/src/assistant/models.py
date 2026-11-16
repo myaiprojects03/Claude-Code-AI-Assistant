@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, TSTZRANGE, UUID, ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-EMBEDDING_DIM = 768  # nomic-embed-text
+EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5 via fastembed (see kb/embeddings.py)
 
 NAMING = {
     "ix": "ix_%(column_0_label)s",
@@ -429,6 +429,14 @@ class PublicChunk(_ChunkMixin, Base):
     """Approved public content only. Never mixed with internal material."""
 
     __tablename__ = "kb_public_chunks"
+    __table_args__ = (
+        Index(
+            "ix_kb_public_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
@@ -438,6 +446,14 @@ class InternalChunk(_ChunkMixin, Base):
     """ACL columns are denormalised so retrieval filters before the vector search."""
 
     __tablename__ = "kb_internal_chunks"
+    __table_args__ = (
+        Index(
+            "ix_kb_internal_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )

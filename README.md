@@ -5,7 +5,8 @@ free and open-source tools. See [docs/phase-0](docs/phase-0/README.md) for the d
 
 ## Status
 - [x] Phase 0: discovery and decisions
-- [x] Phase 1: foundation (46 tests passing against Postgres)
+- [x] Phase 1: foundation
+- [x] Phase 2: client chat assistant MVP ([docs](docs/phase-2/README.md)): widget, knowledge base, qualification, booking, guardrails. 98 tests passing.
 
 ## Quick start (Windows)
 

@@ -20,7 +20,7 @@ from assistant import alerts, metrics
 from assistant.db import get_sessionmaker
 from assistant.logs import configure_logging
 from assistant.models import IntentStatus, OutboxItem, OutboxStatus, ToolIntent
-from assistant.outbox.handlers import Handler, PermanentError, default_handlers
+from assistant.outbox.handlers import Handler, PermanentError, build_handlers
 from assistant.settings import Settings, get_settings
 
 log = structlog.get_logger()
@@ -51,7 +51,7 @@ class OutboxWorker:
         settings: Settings | None = None,
     ):
         self.sm = sessionmaker or get_sessionmaker()
-        self.handlers = handlers if handlers is not None else default_handlers()
+        self.handlers = handlers if handlers is not None else build_handlers(self.sm)
         self.s = settings or get_settings()
 
     async def reclaim_stuck(self) -> int:

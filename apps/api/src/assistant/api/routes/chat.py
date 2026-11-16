@@ -19,6 +19,7 @@ from assistant.auth import (
 from assistant.db import get_session
 from assistant.models import Channel, Consent, Conversation
 from assistant.orchestrator import Orchestrator
+from assistant.ratelimit import limit_public
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -46,7 +47,12 @@ class Reply(BaseModel):
     degraded: bool = False
 
 
-@router.post("/chat/sessions", response_model=SessionStarted, status_code=201)
+@router.post(
+    "/chat/sessions",
+    response_model=SessionStarted,
+    status_code=201,
+    dependencies=[Depends(limit_public)],
+)
 async def start_session(body: StartSession, session: AsyncSession = Depends(get_session)):
     if not body.consent:
         raise HTTPException(
@@ -70,7 +76,7 @@ async def start_session(body: StartSession, session: AsyncSession = Depends(get_
     )
 
 
-@router.post("/chat/messages", response_model=Reply)
+@router.post("/chat/messages", response_model=Reply, dependencies=[Depends(limit_public)])
 async def send_message(
     body: SendMessage,
     chat: ChatSession = Depends(get_chat_session),

@@ -10,12 +10,12 @@ Dev machine: i5-8500 (6 cores), 32 GB RAM, no NVIDIA GPU, Docker not yet install
 
 | Area | Choice | Why | Fallback |
 |---|---|---|---|
-| Containers | **Podman Desktop** (or Docker Desktop) | Podman is fully free with no licence conditions. Docker Desktop is free only for personal use or companies under 250 staff and $10M revenue. | Docker Engine in WSL2 |
+| Containers | **Podman** (CLI; data on D:) | Podman is fully free with no licence conditions. Docker Desktop is free only for personal use or companies under 250 staff and $10M revenue. | Docker Engine in WSL2 |
 | Backend | **Python 3.12 + FastAPI** | Strong AI/RAG ecosystem, async, typed | — |
 | Database | **PostgreSQL 16 + pgvector** | One database for app data, the outbox and vector search | — |
 | Queue / jobs | **Postgres outbox + worker** (`SELECT … FOR UPDATE SKIP LOCKED`) | Gives idempotency and retries without adding Redis or RabbitMQ | Redis + RQ |
 | LLM | **Provider-agnostic layer** (see below) | Keeps everything free with no lock-in | — |
-| Embeddings | **Ollama `nomic-embed-text`** (local) | Free, runs well on CPU, and confidential documents never leave the machine | `bge-small` via sentence-transformers |
+| Embeddings | **fastembed `bge-small-en-v1.5`** (local ONNX, CPU) | Free, no GPU or Ollama install, and documents never leave the machine. *(Changed in Phase 2 from Ollama `nomic-embed-text`, which would install onto the full C: drive.)* | Ollama `nomic-embed-text` |
 | RAG framework | Plain code + pgvector (no LangChain) | Access filtering stays explicit and auditable | LlamaIndex |
 | CRM | **HubSpot Free CRM** | Free forever, with a full REST API through a private app (contacts, companies, deals, notes) | Twenty CRM (self-hosted, open source) |
 | Ticketing | **Jira Service Management Free** (3 agents) | Free cloud plan, REST API, customer-request model | Zammad (self-hosted, open source) |
@@ -26,7 +26,7 @@ Dev machine: i5-8500 (6 cores), 32 GB RAM, no NVIDIA GPU, Docker not yet install
 | Auth / SSO / roles | **Keycloak** (self-hosted OIDC) | Real SSO and role-based access, free | Authentik |
 | Web chat widget | **Preact + Vite** (one small embeddable JS file) | Small bundle that drops into any site | — |
 | Admin dashboard + internal assistant UI | **Next.js + shadcn/ui** | Free, quick to build | React + Vite |
-| LLM tracing / evals | **Langfuse** (self-hosted) + **promptfoo** | Both open source; promptfoo runs the guardrail and adversarial eval sets | — |
+| LLM tracing / evals | **Langfuse** (self-hosted) + **Python eval runner** (`apps/api/evals`) | Langfuse is open source. *(Changed in Phase 2: a small Python runner replaced promptfoo; it needs no extra dependencies and runs the real orchestrator.)* | promptfoo |
 | Logs, metrics, alerts | **Grafana + Loki + Prometheus**, alerts sent to Slack | All open source | GlitchTip for errors |
 | Secrets | **SOPS + age** (encrypted in the repo), `.env` locally | Free and needs no server | Infisical self-hosted |
 | CI/CD | **GitHub Actions** (free for public repos, 2,000 minutes a month for private ones) | Free | — |
@@ -43,7 +43,7 @@ One `LLMProvider` interface, with the adapter selected by config:
 
 | Adapter | Cost | Use |
 |---|---|---|
-| `groq` (Llama 3.3 70B / Llama 3.1 8B) | Free tier, rate-limited | **Default.** Web chat and messaging; fast, with tool calling |
+| `groq` (`openai/gpt-oss-120b`) + `groq_alt` (`openai/gpt-oss-20b`) | Free tier, 8k tokens/min per model | **Default.** *(Llama 3.3 was retired by Groq; changed 2026-11-16.)* Web chat and messaging; fast, with tool calling |
 | `ollama` (Qwen2.5 7B / Llama 3.1 8B, CPU) | Free, fully local | Internal knowledge assistant (confidential data stays on the machine) and offline dev. About 5–8 tokens a second on this CPU. |
 | `gemini` (Gemini Flash) | Free tier | Fallback |
 | `anthropic` (Claude) | Paid | Built but **disabled** |

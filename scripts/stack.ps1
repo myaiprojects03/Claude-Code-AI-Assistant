@@ -9,7 +9,8 @@
 
 param([ValidateSet('up', 'obs', 'down', 'status', 'stop-vm')] [string]$cmd = 'status')
 
-$ErrorActionPreference = 'Stop'
+# Native tools (podman) write warnings to stderr; don't treat those as fatal.
+$ErrorActionPreference = 'Continue'
 $root = Split-Path $PSScriptRoot -Parent
 $env:XDG_DATA_HOME = 'D:\PodmanData'
 $env:Path = "$root\.venv\Scripts;" + [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
@@ -18,7 +19,7 @@ $compose = Join-Path $root 'infra\compose.yaml'
 
 function Start-VM {
     $state = podman machine inspect --format '{{.State}}' 2>$null
-    if ($state -ne 'running') { podman machine start }
+    if ($state -ne 'running') { podman machine start 2>&1 | Where-Object { $_ -notmatch 'API forwarding' } }
 }
 
 switch ($cmd) {

@@ -25,6 +25,7 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql+asyncpg://assistant:assistant-dev@localhost:5432/assistant_test
       LLM_CHAIN: fake
+      EMBEDDER: hash  # no model download in CI
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,3 +44,20 @@ jobs:
           fi
       - name: Tests
         run: pytest -q
+
+  widget:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/widget
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/widget/package-lock.json
+      - run: npm ci --cache .npm-cache
+      - run: npm run build
+      - name: Bundle stays small
+        run: test $(stat -c%s dist/assistant-chat.js) -lt 60000

@@ -13,8 +13,9 @@ from typing import Any, ClassVar
 
 import structlog
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import insert, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant import metrics
@@ -40,6 +41,19 @@ class OutboxSpec:
     payload: dict[str, Any]
 
 
+@dataclass
+class Planned:
+    """What a side-effect tool decided: effects to enqueue, plus details for the model."""
+
+    effects: list[OutboxSpec]
+    result: dict[str, Any] = field(default_factory=dict)
+
+
+class ToolRejected(Exception):
+    """A tool refuses the call (e.g. slot just taken). Nothing is recorded; the message
+    is returned to the model so it can recover (offer another slot, ask for an email...)."""
+
+
 class Tool:
     name: ClassVar[str]
     description: ClassVar[str]
@@ -56,8 +70,10 @@ class Tool:
         """Read-only tools implement this."""
         raise NotImplementedError
 
-    async def plan(self, ctx: ToolContext, args: BaseModel) -> list[OutboxSpec]:
-        """Side-effect tools implement this: return the effects to enqueue."""
+    async def plan(self, ctx: ToolContext, args: BaseModel, key: str) -> Planned:
+        """Side-effect tools implement this. `key` is the intent's idempotency key; reuse it
+        for anything that must also be unique downstream (booking rows, calendar event ids).
+        May write DB rows on ctx.session (same transaction) and may raise ToolRejected."""
         raise NotImplementedError
 
 
@@ -68,6 +84,30 @@ def canonical_json(data: Any) -> str:
 def idempotency_key(conversation_id: uuid.UUID, tool: str, args: dict[str, Any]) -> str:
     raw = f"{conversation_id}|{tool}|{canonical_json(args)}"
     return hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def enqueue(
+    session: AsyncSession,
+    kind: str,
+    payload: dict[str, Any],
+    *,
+    key: str,
+    intent_id: uuid.UUID | None = None,
+) -> bool:
+    """Add an outbox item unless one with this key already exists. Returns True if added."""
+    res = await session.execute(
+        pg_insert(OutboxItem)
+        .values(
+            idempotency_key=hashlib.sha256(f"{key}:{kind}".encode()).hexdigest(),
+            intent_id=intent_id,
+            kind=kind,
+            payload=payload,
+            max_attempts=get_settings().outbox_max_attempts,
+        )
+        .on_conflict_do_nothing(index_elements=["idempotency_key"])
+        .returning(OutboxItem.id)
+    )
+    return res.scalar_one_or_none() is not None
 
 
 class ToolRegistry:
@@ -97,6 +137,9 @@ class ToolRegistry:
                 result = await self._execute_side_effect(ctx, tool, args)
             else:
                 result = await tool.run(ctx, args)
+        except ToolRejected as e:
+            metrics.TOOL_CALLS.labels(tool=call.name, outcome="rejected").inc()
+            return {"error": str(e)}
         except Exception as e:  # tool bug: log, don't crash the conversation
             log.exception("tool.failed", tool=call.name)
             metrics.TOOL_CALLS.labels(tool=call.name, outcome="error").inc()
@@ -110,27 +153,10 @@ class ToolRegistry:
         args_dict = args.model_dump(mode="json")
         key = idempotency_key(ctx.conversation_id, tool.name, args_dict)
 
-        inserted = await ctx.session.execute(
-            pg_insert(ToolIntent)
-            .values(
-                id=uuid.uuid4(),
-                idempotency_key=key,
-                conversation_id=ctx.conversation_id,
-                tool_name=tool.name,
-                args=args_dict,
-                status="pending",
-            )
-            .on_conflict_do_nothing(index_elements=["idempotency_key"])
-            .returning(ToolIntent.id)
-        )
-        intent_id = inserted.scalar_one_or_none()
-
-        if intent_id is None:
-            existing = (
-                await ctx.session.execute(
-                    select(ToolIntent).where(ToolIntent.idempotency_key == key)
-                )
-            ).scalar_one()
+        existing = (
+            await ctx.session.execute(select(ToolIntent).where(ToolIntent.idempotency_key == key))
+        ).scalar_one_or_none()
+        if existing is not None:
             log.info("tool.duplicate_suppressed", tool=tool.name, intent=str(existing.id))
             return {
                 "status": existing.status,
@@ -139,16 +165,30 @@ class ToolRegistry:
                 "result": existing.result,
             }
 
-        specs = await tool.plan(ctx, args)
-        max_attempts = get_settings().outbox_max_attempts
-        for i, spec in enumerate(specs):
-            await ctx.session.execute(
-                insert(OutboxItem).values(
-                    idempotency_key=hashlib.sha256(f"{key}:{i}:{spec.kind}".encode()).hexdigest(),
-                    intent_id=intent_id,
-                    kind=spec.kind,
-                    payload=spec.payload,
-                    max_attempts=max_attempts,
+        # Savepoint: if the tool rejects the call (or a concurrent identical call wins the
+        # race on the unique key), nothing from this attempt is left behind.
+        try:
+            async with ctx.session.begin_nested():
+                intent_id = uuid.uuid4()
+                ctx.session.add(
+                    ToolIntent(
+                        id=intent_id,
+                        idempotency_key=key,
+                        conversation_id=ctx.conversation_id,
+                        tool_name=tool.name,
+                        args=args_dict,
+                        status="pending",
+                    )
                 )
-            )
-        return {"status": "queued", "reference": str(intent_id)[:8]}
+                await ctx.session.flush()
+                planned = await tool.plan(ctx, args, key)
+                for i, spec in enumerate(planned.effects):
+                    await enqueue(
+                        ctx.session, spec.kind, spec.payload, key=f"{key}:{i}", intent_id=intent_id
+                    )
+        except IntegrityError as e:
+            if "uq_tool_intents_idempotency_key" not in str(e.orig):
+                raise
+            log.info("tool.duplicate_race", tool=tool.name)
+            return {"status": "pending", "duplicate": True}
+        return {"status": "queued", "reference": str(intent_id)[:8], **planned.result}

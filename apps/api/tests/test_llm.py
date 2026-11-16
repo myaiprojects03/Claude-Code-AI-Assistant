@@ -154,3 +154,41 @@ def test_anthropic_conversion_merges_tool_results_and_extracts_system():
     assert system == "rules"
     assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
     assert [b["tool_use_id"] for b in msgs[2]["content"]] == ["c1", "c2"]
+
+
+def test_retry_after_parsing():
+    from assistant.llm.openai_compat import retry_after_seconds
+
+    def r(text="", headers=None):
+        return httpx.Response(429, text=text, headers=headers or {})
+
+    assert retry_after_seconds(r(headers={"retry-after": "3"})) == 3.0
+    assert retry_after_seconds(r("Please try again in 13.92s. Need more")) == 13.92
+    assert retry_after_seconds(r("Please try again in 975ms.")) == 0.975
+    assert retry_after_seconds(r("try again in 1m5.5s")) == 65.5
+    assert retry_after_seconds(r("nope")) is None
+
+
+@respx.mock
+async def test_short_429_is_waited_out_long_one_is_not(monkeypatch):
+    import assistant.llm.openai_compat as oc
+
+    slept = []
+
+    async def fake_sleep(s):
+        slept.append(s)
+
+    monkeypatch.setattr(oc.asyncio, "sleep", fake_sleep)
+    route = respx.post(f"{URL}/chat/completions")
+    ok = {"choices": [{"message": {"content": "hi"}}]}
+    route.side_effect = [
+        httpx.Response(429, text="try again in 1.5s"),
+        httpx.Response(200, json=ok),
+    ]
+    assert (await provider().chat([LLMMessage("user", "x")])).content == "hi"
+    assert slept == [1.75]
+
+    route.side_effect = [httpx.Response(429, text="try again in 40s")]
+    with pytest.raises(LLMError) as ei:
+        await provider().chat([LLMMessage("user", "x")])
+    assert ei.value.retryable and ei.value.status == 429  # falls over to the next model

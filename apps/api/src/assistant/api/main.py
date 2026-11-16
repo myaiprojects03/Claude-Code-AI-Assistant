@@ -15,7 +15,7 @@ from assistant.llm.factory import build_chain
 from assistant.logs import configure_logging
 from assistant.orchestrator import Orchestrator
 from assistant.settings import get_settings
-from assistant.tools import ToolRegistry, default_tools
+from assistant.tools import ToolRegistry, build_tools
 
 log = structlog.get_logger()
 
@@ -33,7 +33,7 @@ def create_app(
         configure_logging(json=settings.app_env != "dev")
         init_engine(database_url)
         app.state.orchestrator = Orchestrator(
-            llm or build_chain(), tools or ToolRegistry(default_tools())
+            llm or build_chain(), tools or ToolRegistry(build_tools())
         )
         log.info("api.started", env=settings.app_env, llm=app.state.orchestrator.llm.name)
         yield
@@ -42,7 +42,7 @@ def create_app(
     app = FastAPI(title="AI Assistant API", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://localhost:5173"],
+        allow_origins=settings.allowed_origins_list,
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )

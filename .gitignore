@@ -26,3 +26,5 @@ dist/
 Thumbs.db
 .vscode/
 .idea/
+.cache/
+apps/api/evals/results/

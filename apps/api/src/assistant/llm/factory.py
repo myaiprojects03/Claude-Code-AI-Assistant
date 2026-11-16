@@ -27,6 +27,16 @@ def build_provider(name: str, s: Settings) -> LLMProvider | None:
             api_key=s.groq_api_key,
             timeout_s=s.llm_timeout_s,
         )
+    if name == "groq_alt":
+        if not s.groq_api_key:
+            return None
+        return OpenAICompatProvider(
+            name="groq_alt",
+            base_url=GROQ_URL,
+            model=s.groq_alt_model,
+            api_key=s.groq_api_key,
+            timeout_s=s.llm_timeout_s,
+        )
     if name == "gemini":
         if not s.gemini_api_key:
             return None

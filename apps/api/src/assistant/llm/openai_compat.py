@@ -1,6 +1,8 @@
 """One adapter for every OpenAI-compatible endpoint: Groq, Gemini (OpenAI mode), Ollama."""
 
+import asyncio
 import json
+import re
 import time
 from typing import Any
 
@@ -9,6 +11,24 @@ import httpx
 from assistant.llm.base import LLMError, LLMMessage, LLMResponse, ToolCall, ToolSpec, Usage
 
 RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
+
+
+_TRY_AGAIN = re.compile(r"try again in (?:(\d+)m)?([\d.]+)(ms|s)", re.I)
+
+
+def retry_after_seconds(resp: httpx.Response) -> float | None:
+    """Seconds to wait from a 429: Retry-After header, else Groq's 'try again in 13.9s'."""
+    header = resp.headers.get("retry-after")
+    if header:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+    if m := _TRY_AGAIN.search(resp.text):
+        minutes, value, unit = m.groups()
+        secs = float(value) / (1000 if unit.lower() == "ms" else 1)
+        return secs + 60 * int(minutes or 0)
+    return None
 
 
 def to_openai_messages(messages: list[LLMMessage]) -> list[dict[str, Any]]:
@@ -70,9 +90,13 @@ class OpenAICompatProvider:
         api_key: str = "",
         timeout_s: float = 30.0,
         client: httpx.AsyncClient | None = None,
+        max_429_wait_s: float = 8.0,
+        max_429_retries: int = 2,
     ):
         self.name = name
         self.model = model
+        self._max_429_wait_s = max_429_wait_s
+        self._max_429_retries = max_429_retries
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._headers = {"Content-Type": "application/json"}
         if api_key:
@@ -99,10 +123,19 @@ class OpenAICompatProvider:
             body["tool_choice"] = "auto"
 
         started = time.perf_counter()
-        try:
-            resp = await self._client.post(self._url, headers=self._headers, json=body)
-        except (httpx.TimeoutException, httpx.TransportError) as e:
-            raise LLMError(f"transport error: {e!r}", provider=self.name, retryable=True) from e
+        for attempt in range(self._max_429_retries + 1):
+            try:
+                resp = await self._client.post(self._url, headers=self._headers, json=body)
+            except (httpx.TimeoutException, httpx.TransportError) as e:
+                raise LLMError(f"transport error: {e!r}", provider=self.name, retryable=True) from e
+            if resp.status_code != 429 or attempt == self._max_429_retries:
+                break
+            # Free tiers rate-limit per minute and say how long to wait. A short wait beats
+            # failing over (or giving the visitor an error); long waits fall through.
+            wait = retry_after_seconds(resp)
+            if wait is None or wait > self._max_429_wait_s:
+                break
+            await asyncio.sleep(wait + 0.25)
 
         if resp.status_code >= 400:
             raise LLMError(

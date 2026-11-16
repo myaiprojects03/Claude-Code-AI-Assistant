@@ -14,9 +14,9 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assistant import alerts, config_store
+from assistant import alerts, config_store, guardrails
 from assistant.llm.base import LLMError, LLMMessage, LLMProvider, ToolCall
-from assistant.models import Conversation, ConversationStatus, Message, MessageRole
+from assistant.models import Channel, Conversation, ConversationStatus, Message, MessageRole
 from assistant.settings import Settings, get_settings
 from assistant.tools.registry import ToolContext, ToolRegistry
 
@@ -35,6 +35,7 @@ class TurnResult:
     provider: str | None = None
     tools_used: list[str] = field(default_factory=list)
     degraded: bool = False
+    guarded: bool = False  # reply replaced by the guardrail fallback
 
 
 def message_to_llm(m: Message) -> LLMMessage:
@@ -99,6 +100,8 @@ class Orchestrator:
             conversation_id=str(conversation_id), channel=conv.channel
         )
 
+        if guardrails.flag_injection(text):
+            log.warning("guardrail.injection_flagged")
         session.add(Message(conversation_id=conv.id, role=MessageRole.user, content=text))
         await session.commit()
 
@@ -138,11 +141,25 @@ class Orchestrator:
                 await session.commit()
                 return TurnResult(conv.id, fallback, degraded=True, tools_used=tools_used)
 
+            content = resp.content
+            guarded = False
+            if not resp.tool_calls and conv.channel != Channel.internal:
+                verdict = guardrails.check_reply(content or "")
+                if not verdict.allowed:
+                    log.warning(
+                        "guardrail.blocked",
+                        rule=verdict.rule,
+                        match=verdict.match,
+                        provider=resp.provider,
+                    )
+                    content = await config_store.get_value(session, "guardrail.fallback")
+                    guarded = True
+
             session.add(
                 Message(
                     conversation_id=conv.id,
                     role=MessageRole.assistant,
-                    content=resp.content,
+                    content=content,
                     tool_calls=[
                         {"id": c.id, "name": c.name, "arguments": c.arguments}
                         for c in resp.tool_calls
@@ -159,7 +176,11 @@ class Orchestrator:
             if not resp.tool_calls:
                 await session.commit()
                 return TurnResult(
-                    conv.id, resp.content or "", provider=resp.provider, tools_used=tools_used
+                    conv.id,
+                    content or "",
+                    provider=resp.provider,
+                    tools_used=tools_used,
+                    guarded=guarded,
                 )
 
             for call in resp.tool_calls:

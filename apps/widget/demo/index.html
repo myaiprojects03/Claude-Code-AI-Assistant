@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme IT Consulting (demo site)</title>
+    <style>
+      body { margin: 0; font-family: Georgia, serif; background: #faf8f4; color: #222; }
+      header, main { max-width: 760px; margin: 0 auto; padding: 32px 20px; }
+      h1 { font-size: 40px; margin: 0 0 8px; }
+      .note { background: #fff3cd; padding: 12px 16px; border-radius: 8px; font-family: system-ui; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Acme IT Consulting</h1>
+      <p>Cloud, security and managed IT for organisations of every size.</p>
+    </header>
+    <main>
+      <p class="note">Demo page for local development. The chat widget is in the bottom-right corner
+        and talks to the API at <code>http://localhost:8000</code>.</p>
+      <p>Lorem ipsum stand-in content so the page looks like a real site. The site's own styles
+        (this serif font, for example) do not leak into the widget, which renders in a Shadow DOM.</p>
+    </main>
+    <!-- Production embed: <script src="/assistant-chat.js" data-api="https://api.example.com"></script> -->
+    <script type="module" src="/src/main.jsx" data-api="http://localhost:8000"></script>
+  </body>
+</html>

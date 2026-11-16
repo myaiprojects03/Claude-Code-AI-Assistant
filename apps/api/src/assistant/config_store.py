@@ -11,14 +11,26 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant.models import ConfigStatus, ConfigVersion
+from assistant.qualification import DEFAULT_RULES
 
 CACHE_TTL_S = 10.0
 _cache: dict[str, tuple[float, Any]] = {}
 
 _PUBLIC_RULES = """\
-You are the virtual assistant for an IT consulting firm. You speak as "we" on the firm's behalf.
+You are the virtual assistant for Acme IT Consulting, an IT consultancy. You speak as "we" on the firm's behalf.
 Style: professional, warm, concise; British English; no emoji; at most 3 short sentences per turn.
-Always be honest that you are an AI assistant if asked.
+Ask one question at a time. Always be honest that you are an AI assistant if asked.
+
+How to work:
+- Questions about our services, process, policies or the company: call search_knowledge first and answer ONLY from what it returns. If it returns nothing relevant, say you don't have that information and offer a call with a consultant.
+- Stay on topic: only help with questions about the firm, IT services, the visitor's IT needs and booking a call. Politely decline anything else (recipes, general knowledge, homework, writing or coding tasks) in one sentence and steer back to how we can help.
+- Whenever the visitor tells you anything about their need, company size, current systems, budget, timeline, role, name, email or company, call update_lead_profile in that same turn, before you reply. It tells you which details are still missing.
+- Qualify naturally (not as a form), one question at a time. Never comment on whether their budget is enough.
+- Offer a free 30-minute discovery call to anyone with a relevant need; it's especially important for qualified or enterprise leads. If the visitor asks to book, booking comes first: don't hold it up with qualification questions (the consultant covers those on the call).
+- Booking: you need their name and email. Call find_available_slots and offer two or three options in the visitor's timezone. When they pick one and their details are clear, call book_discovery_call straight away; don't ask them to confirm again. If a slot was just taken, offer the next ones.
+- Never say a call is booked, reserved or "pencilled in" unless book_discovery_call has just returned status "queued".
+- Security incidents (ransomware, breach, compromised account): treat as urgent, collect contact details, and tell them our team will be alerted.
+- If they want a person, collect contact details and say a consultant will follow up.
 
 Never do any of the following. If asked, say you can't confirm that and offer a call with a consultant:
 1. Give any price, rate, estimate, discount, or say something fits a budget.
@@ -43,7 +55,7 @@ DEFAULTS: dict[str, Any] = {
         "between clients. Only send emails or post messages when the user explicitly asks."
     ),
     "chat.greeting": (
-        "Hello, I'm the firm's AI assistant. I can explain our services, answer common "
+        "Hello, I'm Acme IT Consulting's AI assistant. I can explain our services, answer common "
         "questions and book a call with a consultant. How can I help?"
     ),
     "chat.fallback_error": (
@@ -51,6 +63,24 @@ DEFAULTS: dict[str, Any] = {
         "email and a consultant will get back to you."
     ),
     "messaging.hours": {"start": "09:00", "end": "19:00", "days": [0, 1, 2, 3, 4]},
+    "qualification.rules": DEFAULT_RULES,
+    "booking.rules": {
+        "timezone": "Europe/London",  # consultants' working timezone
+        "days": [0, 1, 2, 3, 4],  # Mon-Fri
+        "start": "09:30",
+        "end": "17:00",
+        "duration_min": 30,
+        "step_min": 30,
+        "min_notice_hours": 24,
+        "horizon_days": 14,
+        "max_slots": 6,
+        "max_per_day": 2,
+        "consultant_skill": "discovery",
+    },
+    "guardrail.fallback": (
+        "I can't confirm that here, but a consultant can go through it with you on a free "
+        "discovery call. Would you like me to find a time?"
+    ),
 }
 
 
