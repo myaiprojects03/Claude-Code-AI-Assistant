@@ -7,6 +7,7 @@ The outbox worker performs the effect. Retrying the same call returns the origin
 
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -65,6 +66,9 @@ class Tool:
     side_effect: ClassVar[bool] = False
     # Only offered (and only runnable) once the visitor has verified their identity.
     requires_verification: ClassVar[bool] = False
+    # Only offered when the person's own message asks for it (e.g. "send", "post"). A model
+    # that never sees the tool can't reach for it on a drafting turn (eval finding).
+    offer_when: ClassVar[re.Pattern[str] | None] = None
 
     def spec(self) -> ToolSpec:
         schema = self.args_model.model_json_schema()
@@ -124,11 +128,17 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
-    def specs_for(self, channel: str, verified: bool = False) -> list[ToolSpec]:
+    def specs_for(
+        self, channel: str, verified: bool = False, user_text: str | None = None
+    ) -> list[ToolSpec]:
+        """`user_text` is the person's latest message; when given, intent-gated tools are
+        only offered if it asks for them."""
         return [
             t.spec()
             for t in self._tools.values()
-            if channel in t.channels and (verified or not t.requires_verification)
+            if channel in t.channels
+            and (verified or not t.requires_verification)
+            and (t.offer_when is None or user_text is None or t.offer_when.search(user_text))
         ]
 
     async def execute(self, ctx: ToolContext, call: ToolCall) -> dict[str, Any]:

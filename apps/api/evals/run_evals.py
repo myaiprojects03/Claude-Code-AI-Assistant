@@ -27,7 +27,10 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from assistant import guardrails
+from assistant.auth import StaffUser
+from assistant.grounding import check as check_grounding
 from assistant.integrations.calendar import LocalCalendar
+from assistant.kb import internal as internal_kb
 from assistant.kb import public as kb
 from assistant.kb.embeddings import build_embedder
 from assistant.llm.factory import build_chain
@@ -37,7 +40,7 @@ from assistant.orchestrator import Orchestrator
 from assistant.seed import seed_session
 from assistant.settings import get_settings
 from assistant.tools import ToolRegistry, build_tools
-from evals.cases import CASES, Case
+from evals.cases import CASES, INTERNAL_CASES, Case, InternalCase
 
 RESULTS = Path(__file__).parent / "results"
 # Models often use typographic characters ("H‑502", "don’t"); compare on plain ASCII.
@@ -83,7 +86,7 @@ PACER = TokenPacer(budget_per_minute=6000)
 
 
 async def prepare(url: str):
-    engine = create_async_engine(url)
+    engine = create_async_engine(url, pool_pre_ping=True)  # long model calls
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS btree_gist"))
@@ -190,18 +193,99 @@ async def run_case(sm, orch: Orchestrator, case: Case) -> dict:
     }
 
 
+INTERNAL_USERS = {
+    "consultant": StaffUser(
+        "eval-consultant",
+        "consultant.dev",
+        "consultant.dev@example.test",
+        frozenset({"consultant"}),
+    ),
+    "manager": StaffUser(
+        "eval-manager", "manager.dev", "manager.dev@example.test", frozenset({"manager"})
+    ),
+}
+
+
+async def run_internal_case(sm, orch: Orchestrator, embedder, case: InternalCase) -> dict:
+    user = INTERNAL_USERS[case.user]
+    async with sm() as s:
+        conv = Conversation(id=uuid.uuid4(), channel="internal", staff_sub=user.sub)
+        s.add(conv)
+        await s.commit()
+
+    given: list[str] = []  # exact source texts the model saw, in citation order
+
+    async def documents(s, conv_id, text):
+        note, sources = await internal_kb.retrieve_for_turn(s, embedder, user, conv_id, text)
+        given[:] = [src.text for src in sources]
+        return note, [src.public() for src in sources]
+
+    started = time.perf_counter()
+    async with sm() as s:
+        result = await orch.handle_turn(
+            s, conv.id, case.question, actor_id=user.sub, roles=set(user.roles), context=documents
+        )
+    reply = result.reply.translate(_TYPOGRAPHY)
+    failures: list[str] = []
+    if result.degraded:
+        failures.append("model unavailable")
+    if case.any_of and not any(a in reply.lower() for a in case.any_of):
+        failures.append(f"reply lacks any of {case.any_of}")
+    for pat in case.none_of:
+        if re.search(pat, reply, re.I):
+            failures.append(f"reply matched forbidden /{pat}/")
+    if case.needs_sources and not result.sources:
+        failures.append("no sources returned")
+    grounding = check_grounding(reply, given, case.question)
+    if case.grounded and not grounding.ok:
+        if grounding.unsupported:
+            failures.append(f"unsupported facts: {'; '.join(grounding.unsupported[:3])}")
+        if grounding.bad_citations:
+            failures.append(f"citations to missing sources: {grounding.bad_citations}")
+    if case.min_structure:
+        found = [h for h in case.structure if h in reply.lower()]
+        if len(found) < case.min_structure:
+            failures.append(f"template sections {len(found)}/{case.min_structure}: {found}")
+    return {
+        "id": case.id,
+        "category": case.category,
+        "user": case.user,
+        "passed": not failures,
+        "failures": failures,
+        "replies": [result.reply],
+        "sources": [f"[{x['n']}] {x['title']}" for x in result.sources],
+        "facts_checked": grounding.checked,
+        # Facts the model invented that the runtime guard replaced with [TO CONFIRM]. Reported
+        # so the guard can't hide how often the raw model makes things up.
+        "guard_replaced": result.unverified,
+        "inline_citations": len(re.findall(r"\[\d{1,2}\]", reply)),
+        "seconds": round(time.perf_counter() - started, 1),
+    }
+
+
 async def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", help="comma-separated case ids")
     ap.add_argument("--dry-run", action="store_true", help="fake model; checks plumbing only")
+    ap.add_argument(
+        "--internal",
+        action="store_true",
+        help="run the internal knowledge assistant cases on the local model",
+    )
     args = ap.parse_args()
 
     url = os.environ.get("TEST_DATABASE_URL") or get_settings().database_url.replace(
         "/assistant", "/assistant_test"
     )
-    cases = [c for c in CASES if not args.only or c.id in args.only.split(",")]
-    llm = FakeProvider() if args.dry_run else build_chain()
-    if not args.dry_run and get_settings().llm_chain_list == ["fake"]:
+    pool = INTERNAL_CASES if args.internal else CASES
+    cases = [c for c in pool if not args.only or c.id in args.only.split(",")]
+    if args.dry_run:
+        llm = FakeProvider()
+    elif args.internal:
+        llm = build_chain(get_settings().internal_llm_chain_list)  # local Ollama by default
+    else:
+        llm = build_chain()
+    if not args.dry_run and not args.internal and get_settings().llm_chain_list == ["fake"]:
         print("LLM_CHAIN is 'fake'. Set GROQ_API_KEY and LLM_CHAIN=groq,gemini in .env first.")
         return 2
 
@@ -210,11 +294,25 @@ async def main() -> int:
 
     identity.secrets.randbelow = lambda n: 739214
     engine, sm, embedder = await prepare(url)
-    orch = Orchestrator(llm, ToolRegistry(build_tools(embedder, LocalCalendar())))
-    print(f"Running {len(cases)} cases with {llm.name} on {url.rsplit('/', 1)[-1]}\n")
+    orch = Orchestrator(llm, ToolRegistry(build_tools(embedder, LocalCalendar())), internal_llm=llm)
+    if args.internal:
+        async with sm() as s:
+            await internal_kb.ingest_dir(s, embedder, internal_kb.INTERNAL_DIR)
+    print(f"Running {len(cases)} cases with {llm.name} ({llm.model}) on {url.rsplit('/', 1)[-1]}\n")
 
     results = []
     for case in cases:
+        if isinstance(case, InternalCase):
+            r = await run_internal_case(sm, orch, embedder, case)
+            results.append(r)
+            mark = "PASS" if r["passed"] else "FAIL"
+            guard = r["guard_replaced"]
+            print(
+                f"[{mark}] {case.id:<20} {case.category:<12} {case.user:<10} "
+                f"{r['seconds']:>5}s {'; '.join(r['failures'])}"
+                + (f" [guard replaced: {', '.join(guard)}]" if guard else "")
+            )
+            continue
         r = await run_case(sm, orch, case)
         if any("model unavailable" in f for f in r["failures"]):
             # Free-tier per-minute token limits, not behaviour: let the window reset, retry once.

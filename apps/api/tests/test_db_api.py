@@ -146,7 +146,8 @@ async def test_internal_side_effect_tool_goes_through_outbox(sm):
         ) as c:
             cid = (await c.post("/v1/internal/conversations")).json()["conversation_id"]
             r = await c.post(
-                f"/v1/internal/conversations/{cid}/messages", json={"text": "email the client"}
+                f"/v1/internal/conversations/{cid}/messages",
+                json={"text": "Please send it to client@example.com"},
             )
     assert r.json()["reply"] == "Queued the email."
     async with sm() as s:

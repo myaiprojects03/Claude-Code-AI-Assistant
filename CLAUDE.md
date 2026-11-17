@@ -16,6 +16,11 @@ support, an internal knowledge assistant, integrations, and an admin dashboard.
 - **Client data separation.** Internal retrieval must filter by role and client *before* the
   vector search. Never put another client's data in a prompt. Client tools filter by the
   *verified* contact's company and answer "not found" for other clients' records.
+- **Actions come from the person, not the model.** Side-effecting tools check the human's own
+  latest message: verification codes and emails must be typed by the visitor, `send_email` needs an
+  explicit "send" and a recipient the user typed. Never rely on the prompt alone for this.
+- **Internal documents stay local.** The internal assistant uses `INTERNAL_LLM_CHAIN` (Ollama);
+  don't route it to a cloud model without the user's decision.
 - **Verification before client data.** Tools that touch a client's tickets, projects or bookings
   set `requires_verification = True`: the model doesn't see them, and they're refused, until
   `verify_code` succeeds. Never reveal whether an email belongs to a client.
@@ -28,7 +33,7 @@ apps/api/src/assistant/
   api/            FastAPI app + routes (health, chat, admin)
   llm/            LLMProvider interface; openai_compat (groq/gemini/ollama), anthropic (off), fake
   tools/          ToolRegistry (+ idempotency, savepoints, ToolRejected), builtin + public tools
-  kb/             embeddings (fastembed / hash) and the public knowledge base
+  kb/             embeddings (fastembed / hash), public KB, internal KB (access-filtered search)
   tools/clients.py  verification, tickets, projects, bookings, request_handover
   integrations/   CRM (local/hubspot), calendar (local/google), ticketing (local/jira) adapters
   booking.py      slots and reservation   leads.py  contacts, leads, CRM sync
@@ -43,6 +48,7 @@ apps/api/src/assistant/
 apps/widget/      Preact chat widget (single-file build)
 apps/api/evals/   eval cases + runner against the real model
 content/public/   approved public content (the only source for public answers)
+content/internal/ confidential internal documents (front matter: client, sensitivity, roles)
 infra/            compose (postgres+pgvector, keycloak, mailpit; obs profile)
 docs/phase-N/     phase decisions and docs
 ```
@@ -57,7 +63,10 @@ docs/phase-N/     phase decisions and docs
 - Run the API: `../../.venv/Scripts/uvicorn assistant.api.main:app --reload --port 8000`
 - Run the worker: `../../.venv/Scripts/assistant-worker`
 - Migrations: `../../.venv/Scripts/alembic revision --autogenerate -m "..."`, then `alembic upgrade head`
-- Content and seed: `../../.venv/Scripts/assistant-ingest` (re-index content/public), `assistant-seed`
+- Content and seed: `../../.venv/Scripts/assistant-ingest` (re-index content/public),
+  `assistant-ingest-internal` (content/internal), `assistant-seed`
+- Local model: Ollama at `D:\Ollama` (models in `D:\Ollama\models`); start with
+  `D:\Ollama\ollama.exe serve`. Internal evals: `python -m evals.run_evals --internal`
 - Evals (real model): `../../.venv/Scripts/python -m evals.run_evals [--only id,id] [--dry-run]`
 - Widget: `cd ../widget && npm run dev` (demo at /demo/) or `npm run build`. npm's cache is set
   to D: in `apps/widget/.npmrc`.

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from assistant import alerts, metrics
 from assistant.api.routes import admin, chat, health
 from assistant.db import dispose_engine, init_engine
+from assistant.kb.embeddings import Embedder, build_embedder
 from assistant.llm.base import LLMProvider
 from assistant.llm.factory import build_chain
 from assistant.logs import configure_logging
@@ -23,7 +24,9 @@ log = structlog.get_logger()
 def create_app(
     *,
     llm: LLMProvider | None = None,
+    internal_llm: LLMProvider | None = None,
     tools: ToolRegistry | None = None,
+    embedder: Embedder | None = None,
     database_url: str | None = None,
 ) -> FastAPI:
     settings = get_settings()
@@ -32,10 +35,21 @@ def create_app(
     async def lifespan(app: FastAPI):
         configure_logging(json=settings.app_env != "dev")
         init_engine(database_url)
-        app.state.orchestrator = Orchestrator(
-            llm or build_chain(), tools or ToolRegistry(build_tools())
+        app.state.embedder = embedder or build_embedder()
+        public_llm = llm or build_chain()
+        # Internal (confidential) chats default to the local chain; a supplied test model is
+        # used for both so tests never need Ollama.
+        private_llm = internal_llm or (
+            llm if llm is not None else build_chain(settings.internal_llm_chain_list)
         )
-        log.info("api.started", env=settings.app_env, llm=app.state.orchestrator.llm.name)
+        app.state.orchestrator = Orchestrator(
+            public_llm,
+            tools or ToolRegistry(build_tools(app.state.embedder)),
+            internal_llm=private_llm,
+        )
+        log.info(
+            "api.started", env=settings.app_env, llm=public_llm.name, internal_llm=private_llm.name
+        )
         yield
         await dispose_engine()
 

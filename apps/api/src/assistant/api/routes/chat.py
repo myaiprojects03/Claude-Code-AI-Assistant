@@ -1,10 +1,11 @@
 """Public visitor chat (website widget in Phase 2) and internal staff chat."""
 
 import uuid
-from typing import Literal
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant import audit, config_store
@@ -17,7 +18,8 @@ from assistant.auth import (
     require_roles,
 )
 from assistant.db import get_session
-from assistant.models import Channel, Consent, Conversation
+from assistant.kb import internal as internal_kb
+from assistant.models import Channel, Consent, Conversation, Message, MessageRole
 from assistant.orchestrator import Orchestrator
 from assistant.ratelimit import limit_public
 
@@ -45,6 +47,7 @@ class Reply(BaseModel):
     conversation_id: uuid.UUID
     reply: str
     degraded: bool = False
+    sources: list[dict[str, Any]] = []  # internal assistant citations: [{n, title, ...}]
 
 
 @router.post(
@@ -113,6 +116,7 @@ async def start_internal(
 async def internal_message(
     conversation_id: uuid.UUID,
     body: SendMessage,
+    request: Request,
     user: StaffUser = Depends(staff_any),
     session: AsyncSession = Depends(get_session),
     orch: Orchestrator = Depends(get_orchestrator),
@@ -129,9 +133,37 @@ async def internal_message(
         target_type="conversation",
         target_id=str(conversation_id),
     )
+    embedder = request.app.state.embedder
+
+    async def documents(s: AsyncSession, conv_id: uuid.UUID, text: str):
+        # Search with the previous question too, so follow-ups ("and the timeline?") work.
+        recent = (
+            (
+                await s.execute(
+                    select(Message.content)
+                    .where(Message.conversation_id == conv_id, Message.role == MessageRole.user)
+                    .order_by(Message.id.desc())
+                    .limit(2)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        query = " ".join(reversed([r for r in recent if r])) or text
+        note, sources = await internal_kb.retrieve_for_turn(s, embedder, user, conv_id, query)
+        return note, [src.public() for src in sources]
+
     result = await orch.handle_turn(
-        session, conversation_id, body.text, actor_id=user.sub, roles=set(user.roles)
+        session,
+        conversation_id,
+        body.text,
+        actor_id=user.sub,
+        roles=set(user.roles),
+        context=documents,
     )
     return Reply(
-        conversation_id=result.conversation_id, reply=result.reply, degraded=result.degraded
+        conversation_id=result.conversation_id,
+        reply=result.reply,
+        degraded=result.degraded,
+        sources=result.sources,
     )

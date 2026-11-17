@@ -52,7 +52,8 @@ def build_provider(name: str, s: Settings) -> LLMProvider | None:
             name="ollama",
             base_url=s.ollama_base_url,
             model=s.ollama_model,
-            timeout_s=max(s.llm_timeout_s, 120),
+            timeout_s=s.ollama_timeout_s,
+            default_max_tokens=s.ollama_max_tokens,
         )
     if name == "anthropic":
         if not (s.anthropic_enabled and s.anthropic_api_key):

@@ -9,7 +9,7 @@ import argparse
 import asyncio
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import structlog
@@ -33,6 +33,7 @@ class ParsedDoc:
     doc_type: str
     chunks: list[tuple[str | None, str]]  # (section, text)
     content_hash: str
+    meta: dict[str, str] = field(default_factory=dict)  # front matter
 
 
 @dataclass
@@ -71,7 +72,7 @@ def parse_markdown(source_uri: str, raw: str) -> ParsedDoc:
             header = f"{title} — {section}" if section else title
             chunks.append((section, f"{header}\n\n{piece}"))
     digest = hashlib.sha256(raw.encode()).hexdigest()
-    return ParsedDoc(source_uri, title, meta.get("type", "page"), chunks, digest)
+    return ParsedDoc(source_uri, title, meta.get("type", "page"), chunks, digest, meta)
 
 
 def _split(text: str) -> list[str]:

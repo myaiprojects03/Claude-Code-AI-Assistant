@@ -22,6 +22,10 @@ class Settings(BaseSettings):
 
     # LLM
     llm_chain: str = "groq,groq_alt,gemini"
+    # Internal knowledge assistant: confidential documents stay on this machine.
+    internal_llm_chain: str = "ollama"
+    ollama_timeout_s: float = 600.0  # CPU inference is slow; a 7B proposal can take 5+ min
+    ollama_max_tokens: int = 2000  # a full proposal is ~1,000 tokens; stops runaway loops
     llm_timeout_s: float = 30.0
     llm_max_tool_steps: int = 5
     groq_api_key: str = ""
@@ -31,7 +35,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.0-flash"
     ollama_base_url: str = "http://localhost:11434/v1"
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen2.5:3b"  # ~28s/answer on an i5-8500 CPU; 7b is ~2x slower
     anthropic_enabled: bool = False
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5-5"
@@ -99,6 +103,10 @@ class Settings(BaseSettings):
     @property
     def llm_chain_list(self) -> list[str]:
         return [p.strip() for p in self.llm_chain.split(",") if p.strip()]
+
+    @property
+    def internal_llm_chain_list(self) -> list[str]:
+        return [p.strip() for p in self.internal_llm_chain.split(",") if p.strip()]
 
     @property
     def allowed_origins_list(self) -> list[str]:

@@ -92,11 +92,14 @@ class OpenAICompatProvider:
         client: httpx.AsyncClient | None = None,
         max_429_wait_s: float = 8.0,
         max_429_retries: int = 2,
+        default_max_tokens: int | None = None,
     ):
         self.name = name
         self.model = model
         self._max_429_wait_s = max_429_wait_s
         self._max_429_retries = max_429_retries
+        # Caps runaway generation (eval finding: a local 3B model looped until the timeout).
+        self._default_max_tokens = default_max_tokens
         self._url = base_url.rstrip("/") + "/chat/completions"
         self._headers = {"Content-Type": "application/json"}
         if api_key:
@@ -116,6 +119,7 @@ class OpenAICompatProvider:
             "messages": to_openai_messages(messages),
             "temperature": temperature,
         }
+        max_tokens = max_tokens or self._default_max_tokens
         if max_tokens:
             body["max_tokens"] = max_tokens
         if tools:

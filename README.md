@@ -9,6 +9,7 @@ free and open-source tools. See [docs/phase-0](docs/phase-0/README.md) for the d
 - [x] Phase 2: client chat assistant MVP ([docs](docs/phase-2/README.md)): widget, knowledge base, qualification, booking, guardrails.
 - [x] Phase 3: existing-client support and handover ([docs](docs/phase-3/README.md)): verification, tickets, projects, rescheduling, reminders, handover routing, public holidays, real Slack + Jira. 148 tests and 24/24 evals passing.
 - ~~Phase 4: voice agent~~ (removed from scope)
+- [x] Phase 5: internal knowledge assistant ([docs](docs/phase-5/README.md)): local Ollama model, permission-filtered search over confidential documents, cited sources, drafting with a fact guard, leak tests. 193 tests passing; internal evals 10/10 on qwen2.5 3B and 7B.
 
 ## Quick start (Windows)
 

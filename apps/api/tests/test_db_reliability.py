@@ -9,7 +9,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from assistant.llm.base import ToolCall
-from assistant.models import Booking, Consultant, Conversation, OutboxItem, ToolIntent
+from assistant.models import Booking, Consultant, Conversation, Message, OutboxItem, ToolIntent
 from assistant.outbox.handlers import PermanentError
 from assistant.outbox.worker import OutboxWorker
 from assistant.settings import Settings
@@ -25,6 +25,11 @@ async def new_conversation(sm, channel="internal") -> uuid.UUID:
     async with sm() as s:
         c = Conversation(id=uuid.uuid4(), channel=channel)
         s.add(c)
+        await s.flush()
+        # send_email only acts on an explicit request naming the recipient (Phase 5 guard).
+        s.add(
+            Message(conversation_id=c.id, role="user", content=f"Please send it to {EMAIL['to']}")
+        )
         await s.commit()
         return c.id
 

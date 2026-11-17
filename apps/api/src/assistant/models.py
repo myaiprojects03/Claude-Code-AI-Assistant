@@ -464,6 +464,21 @@ class ConfigVersion(Base):
 # ---------- Knowledge (Phase 2 public, Phase 5 internal) ----------
 
 
+class ClientAccess(Base):
+    """Which clients a consultant may see in the internal knowledge assistant.
+    Admins and managers see every client; consultants only the ones listed here."""
+
+    __tablename__ = "client_access"
+    __table_args__ = (UniqueConstraint("staff_email", "company_id", name="uq_client_access"),)
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    staff_email: Mapped[str] = mapped_column(String(320), index=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("companies.id", ondelete="CASCADE"), index=True
+    )
+    granted_by: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = _created()
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (_check_in("corpus", Corpus), _check_in("sensitivity", Sensitivity))

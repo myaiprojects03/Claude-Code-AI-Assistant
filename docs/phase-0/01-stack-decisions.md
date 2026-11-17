@@ -46,7 +46,7 @@ One `LLMProvider` interface, with the adapter selected by config:
 | Adapter | Cost | Use |
 |---|---|---|
 | `groq` (`openai/gpt-oss-120b`) + `groq_alt` (`openai/gpt-oss-20b`) | Free tier, 8k tokens/min per model | **Default.** *(Llama 3.3 was retired by Groq; changed 2026-11-16.)* Web chat and messaging; fast, with tool calling |
-| `ollama` (Qwen2.5 7B / Llama 3.1 8B, CPU) | Free, fully local | Internal knowledge assistant (confidential data stays on the machine) and offline dev. About 5–8 tokens a second on this CPU. |
+| `ollama` (`qwen2.5:3b` default, `qwen2.5:7b` optional; CPU) | Free, fully local | **Internal knowledge assistant** (decided 2026-11-17: confidential documents stay on this machine). About 12 words/s for the 3B; 15–60 s per answer. Installed on D:. |
 | `gemini` (Gemini Flash) | Free tier | Fallback |
 | `anthropic` (Claude) | Paid | Built but **disabled** |
 

@@ -8,13 +8,15 @@ Tool intents/outbox rows are committed atomically with the tool-result messages.
 
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assistant import alerts, config_store, guardrails, handover
+from assistant import alerts, config_store, grounding, guardrails, handover
 from assistant.llm.base import LLMError, LLMMessage, LLMProvider, ToolCall
 from assistant.models import Channel, Conversation, ConversationStatus, Message, MessageRole
 from assistant.settings import Settings, get_settings
@@ -26,6 +28,8 @@ HANDED_OVER_REPLY = (
     "A consultant is now looking after this conversation and will reply to you directly."
 )
 STEP_LIMIT_REPLY = "Sorry, I couldn't complete that. A consultant will follow up with you."
+EMPTY_REPLY = "Sorry, I couldn't produce an answer to that. Could you rephrase or try again?"
+CUT_SHORT_NOTE = "(This reply hit the length limit and was cut short. Ask me to continue.)"
 
 
 @dataclass
@@ -36,6 +40,15 @@ class TurnResult:
     tools_used: list[str] = field(default_factory=list)
     degraded: bool = False
     guarded: bool = False  # reply replaced by the guardrail fallback
+    sources: list[dict[str, Any]] = field(default_factory=list)  # internal citations
+    # Facts not found in the sources or the person's messages, replaced with [TO CONFIRM].
+    unverified: list[str] = field(default_factory=list)
+
+
+# Called before the model runs; returns (note for the model, sources to show the user).
+ContextProvider = Callable[
+    [AsyncSession, uuid.UUID, str], Awaitable[tuple[str, list[dict[str, Any]]]]
+]
 
 
 def message_to_llm(m: Message) -> LLMMessage:
@@ -61,8 +74,17 @@ def trim_history(messages: list[Message]) -> list[Message]:
 
 
 class Orchestrator:
-    def __init__(self, llm: LLMProvider, tools: ToolRegistry, settings: Settings | None = None):
+    def __init__(
+        self,
+        llm: LLMProvider,
+        tools: ToolRegistry,
+        settings: Settings | None = None,
+        *,
+        internal_llm: LLMProvider | None = None,
+    ):
         self.llm = llm
+        # Internal (confidential) conversations can use a different, local model chain.
+        self.internal_llm = internal_llm or llm
         self.tools = tools
         self.settings = settings or get_settings()
 
@@ -92,6 +114,7 @@ class Orchestrator:
         *,
         actor_id: str | None = None,
         roles: set[str] | None = None,
+        context: ContextProvider | None = None,
     ) -> TurnResult:
         conv = await session.get(Conversation, conversation_id)
         if conv is None:
@@ -131,6 +154,24 @@ class Orchestrator:
                     "with update_lead_profile. Do not troubleshoot or give security advice."
                 )
 
+        notes = [turn_note] if turn_note else []
+        sources: list[dict[str, Any]] = []
+        if context is not None:
+            # e.g. permission-filtered internal documents. Shown to the model for this turn
+            # only; the source list is stored as a system message for the audit trail.
+            note, sources = await context(session, conv.id, text)
+            notes.append(note)
+            session.add(
+                Message(
+                    conversation_id=conv.id,
+                    role=MessageRole.system,
+                    content=json.dumps({"sources": sources}),
+                    tool_name="context",
+                )
+            )
+            await session.commit()
+        llm = self.internal_llm if conv.channel == Channel.internal else self.llm
+
         system_prompt = await config_store.get_value(session, f"prompt.system.{conv.channel}")
         ctx = ToolContext(
             session=session,
@@ -146,12 +187,12 @@ class Orchestrator:
             history = await self._history(session, conv.id)
             msgs = [LLMMessage(role="system", content=system_prompt)]
             msgs += [message_to_llm(m) for m in history]
-            if turn_note:
-                msgs.append(LLMMessage(role="system", content=turn_note))
+            msgs += [LLMMessage(role="system", content=n) for n in notes]
             # Recomputed each step: verifying mid-turn unlocks the client tools.
-            tool_specs = self.tools.specs_for(conv.channel, verified=ctx.verified)
+            # Side-effecting tools are only offered when the person's message asks for them.
+            tool_specs = self.tools.specs_for(conv.channel, verified=ctx.verified, user_text=text)
             try:
-                resp = await self.llm.chat(msgs, tool_specs or None)
+                resp = await llm.chat(msgs, tool_specs or None)
             except LLMError as e:
                 await alerts.send_alert("critical", "LLM chain failed", error=str(e))
                 fallback = await config_store.get_value(session, "chat.fallback_error")
@@ -164,10 +205,35 @@ class Orchestrator:
                     )
                 )
                 await session.commit()
-                return TurnResult(conv.id, fallback, degraded=True, tools_used=tools_used)
+                return TurnResult(
+                    conv.id, fallback, degraded=True, tools_used=tools_used, sources=sources
+                )
 
+            if tool_specs and not resp.tool_calls and not (resp.content or "").strip():
+                # Eval finding: a local model that tries to call a tool it wasn't offered
+                # comes back empty. One retry with no tools usually gets a real answer.
+                log.warning("orchestrator.empty_retry", provider=resp.provider)
+                try:
+                    resp = await llm.chat(msgs, None)
+                except LLMError:
+                    pass
             content = resp.content
+            if resp.finish_reason == "length" and not resp.tool_calls and content:
+                content += "\n\n" + CUT_SHORT_NOTE
             guarded = False
+            empty = not resp.tool_calls and not (content or "").strip()
+            if empty:  # eval finding: small local models occasionally return nothing
+                log.warning("orchestrator.empty_reply", provider=resp.provider)
+                content = EMPTY_REPLY
+            unverified: list[str] = []
+            if not resp.tool_calls and not empty and context is not None:
+                # Internal answers: figures the sources don't support become [TO CONFIRM].
+                said = " ".join(m.content or "" for m in history if m.role == MessageRole.user)
+                content, unverified = grounding.redact_unsupported(
+                    content or "", "\n".join(notes), said
+                )
+                if unverified:
+                    log.warning("orchestrator.unverified_facts", facts=unverified)
             if not resp.tool_calls and conv.channel != Channel.internal:
                 verdict = guardrails.check_reply(content or "")
                 if not verdict.allowed:
@@ -206,6 +272,9 @@ class Orchestrator:
                     provider=resp.provider,
                     tools_used=tools_used,
                     guarded=guarded,
+                    degraded=empty,
+                    sources=sources,
+                    unverified=unverified,
                 )
 
             for call in resp.tool_calls:

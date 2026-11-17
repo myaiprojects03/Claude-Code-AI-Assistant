@@ -1,12 +1,20 @@
 """Phase 1 tools. Later phases add qualification, booking, tickets and handover."""
 
+import re
 from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, EmailStr, Field
 
-from assistant.tools.registry import OutboxSpec, Planned, Tool, ToolContext
+from assistant import identity
+from assistant.tools.registry import OutboxSpec, Planned, Tool, ToolContext, ToolRejected
+
+# The person's own latest message must ask for the action.
+SEND_INTENT = re.compile(
+    r"\b(send|email (it|this|them|her|him)|mail it|go ahead and (send|email))\b", re.I
+)
+POST_INTENT = re.compile(r"\b(post|notify|tell the team|let the team know|slack|ping)\b", re.I)
 
 ALL_CHANNELS = {"web", "whatsapp", "internal"}
 
@@ -44,8 +52,23 @@ class SendEmail(Tool):
     args_model = SendEmailArgs
     channels = {"internal"}
     side_effect = True
+    offer_when = SEND_INTENT
 
     async def plan(self, ctx: ToolContext, args: SendEmailArgs, key: str) -> Planned:
+        # The decision to send, and the recipient, must come from the person, not the model
+        # (eval finding: asked to *draft*, a small model sent to an invented address).
+        latest = await identity.latest_visitor_message(ctx.session, ctx.conversation_id) or ""
+        if not SEND_INTENT.search(latest):
+            raise ToolRejected(
+                "Not sent: the user didn't ask to send. Show the draft in your "
+                "reply instead and ask if they want it sent."
+            )
+        typed = await identity.emails_typed_by_visitor(ctx.session, ctx.conversation_id, 6)
+        if args.to.lower() not in typed:
+            raise ToolRejected(
+                "Not sent: only send to an address the user has typed. Ask them "
+                "for the recipient's email."
+            )
         return Planned(
             [OutboxSpec("email.send", {"to": args.to, "subject": args.subject, "body": args.body})]
         )
@@ -62,8 +85,12 @@ class NotifyTeam(Tool):
     args_model = NotifyTeamArgs
     channels = {"internal"}
     side_effect = True
+    offer_when = POST_INTENT
 
     async def plan(self, ctx: ToolContext, args: NotifyTeamArgs, key: str) -> Planned:
+        latest = await identity.latest_visitor_message(ctx.session, ctx.conversation_id) or ""
+        if not POST_INTENT.search(latest):
+            raise ToolRejected("Not posted: the user didn't ask to notify the team.")
         return Planned(
             [
                 OutboxSpec(

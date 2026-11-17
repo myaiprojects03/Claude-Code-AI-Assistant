@@ -37,6 +37,7 @@ dev = [
 [project.scripts]
 assistant-worker = "assistant.outbox.worker:main"
 assistant-ingest = "assistant.kb.public:main"
+assistant-ingest-internal = "assistant.kb.internal:main"
 assistant-seed = "assistant.seed:main"
 assistant-check-integrations = "assistant.check_integrations:main"
 

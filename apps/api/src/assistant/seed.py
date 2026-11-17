@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant.db import dispose_engine, get_sessionmaker
-from assistant.models import Company, Consultant, Contact, Project, Ticket
+from assistant.models import ClientAccess, Company, Consultant, Contact, Project, Ticket
 
 CONSULTANTS = [
     {
@@ -94,7 +94,35 @@ CLIENTS = [
             ),
         ],
     },
+    {
+        "company": {
+            "name": "Brightwater Housing",
+            "domain": "brightwater.example.com",
+            "size_band": "251-1000",
+            "is_enterprise": False,
+        },
+        "contact": {
+            "name": "Grace Adeyemi",
+            "email": "grace.adeyemi@brightwater.example.com",
+            "phone": "+44 117 496 0303",
+            "timezone": "Europe/London",
+        },
+        "tickets": [],
+        "projects": [
+            (
+                "Managed IT onboarding",
+                "on track",
+                "Discovery complete; tooling setup starts after contract signature.",
+                "Tooling setup",
+                14,
+            ),
+        ],
+    },
 ]
+
+# Internal knowledge assistant: which clients each consultant may see (by Keycloak email).
+# Admins and managers see every client; consultant.dev is assigned to Northbridge only.
+CLIENT_ACCESS = [("consultant.dev@example.test", "northbridge.example.com")]
 
 
 async def _upsert_consultants(s: AsyncSession) -> dict[str, uuid.UUID]:
@@ -183,6 +211,15 @@ async def seed_session(s: AsyncSession) -> dict[str, int]:
                     )
                 )
                 stats["projects"] += 1
+    for email, domain in CLIENT_ACCESS:
+        company_id = (
+            await s.execute(select(Company.id).where(Company.domain == domain))
+        ).scalar_one()
+        await s.execute(
+            insert(ClientAccess)
+            .values(staff_email=email, company_id=company_id, granted_by="seed")
+            .on_conflict_do_nothing(constraint="uq_client_access")
+        )
     await s.commit()
     return stats
 
