@@ -13,12 +13,24 @@ from typing import Any
 
 import httpx
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from assistant.integrations import build_calendar, build_crm
+from assistant.booking import display
+from assistant.integrations import build_calendar, build_crm, build_ticketing
 from assistant.integrations.calendar import CalendarAdapter, EventSpec
 from assistant.integrations.crm import CRMAdapter, LeadSync
-from assistant.models import Booking, BookingStatus, Company, Consultant, Contact, Lead
+from assistant.integrations.ticketing import TicketAdapter
+from assistant.models import (
+    Booking,
+    BookingStatus,
+    Company,
+    Consultant,
+    Contact,
+    DoNotContact,
+    Lead,
+    Ticket,
+)
 from assistant.outbox.errors import PermanentError
 from assistant.settings import get_settings
 
@@ -133,15 +145,129 @@ def make_crm_handler(sm: async_sessionmaker[AsyncSession], crm: CRMAdapter) -> H
     return sync
 
 
+def make_calendar_cancel_handler(
+    sm: async_sessionmaker[AsyncSession], calendar: CalendarAdapter
+) -> Handler:
+    async def cancel_event(payload: dict[str, Any], key: str) -> str:
+        async with sm() as s:
+            booking = await s.get(Booking, uuid.UUID(payload["booking_id"]))
+            if booking is None or not booking.calendar_event_id:
+                return "no-event"  # never reached the calendar: nothing to remove
+            consultant = await s.get(Consultant, booking.consultant_id)
+            await calendar.cancel_event(
+                consultant.calendar_id or consultant.email, booking.calendar_event_id
+            )
+            return f"cancelled:{booking.calendar_event_id}"
+
+    return cancel_event
+
+
+def make_ticket_handlers(
+    sm: async_sessionmaker[AsyncSession], tickets: TicketAdapter
+) -> dict[str, Handler]:
+    async def create(payload: dict[str, Any], key: str) -> str:
+        async with sm() as s, s.begin():
+            t = await s.get(Ticket, uuid.UUID(payload["ticket_id"]), with_for_update=True)
+            if t is None:
+                raise PermanentError("ticket not found")
+            if t.external_id:
+                return t.external_id
+            company = await s.get(Company, t.company_id)
+            ext = await tickets.create(
+                ref=t.ref,
+                summary=t.summary,
+                description=t.description or "",
+                priority=t.priority,
+                company=company.name,
+            )
+            if ext:
+                t.external_id = ext
+            return ext or f"local:{t.ref}"
+
+    async def comment(payload: dict[str, Any], key: str) -> str:
+        async with sm() as s:
+            t = await s.get(Ticket, uuid.UUID(payload["ticket_id"]))
+            if t is None:
+                raise PermanentError("ticket not found")
+            if not t.external_id:
+                if t.system != "local":  # mirror not created yet: retry after ticket.create
+                    raise RuntimeError("external ticket not created yet")
+                return f"local:{t.ref}"
+            await tickets.comment(t.external_id, f"Client update: {payload['text']}")
+            return f"{t.external_id}:comment"
+
+    return {"ticket.create": create, "ticket.comment": comment}
+
+
+def make_reminder_handler(sm: async_sessionmaker[AsyncSession]) -> Handler:
+    async def remind(payload: dict[str, Any], key: str) -> str:
+        async with sm() as s:
+            b = await s.get(Booking, uuid.UUID(payload["booking_id"]))
+            if (
+                b is None
+                or b.status == BookingStatus.cancelled
+                or b.starts_at.isoformat() != payload["starts_at"]
+            ):
+                return "skipped: booking cancelled or moved"
+            consultant = await s.get(Consultant, b.consultant_id)
+            contact = await s.get(Contact, b.contact_id) if b.contact_id else None
+
+            if payload["audience"] == "consultant":
+                mention = f"<@{consultant.slack_user_id}> " if consultant.slack_user_id else ""
+                who = (contact.name or contact.email) if contact else "a visitor"
+                return await slack_notify(
+                    {
+                        "text": f":alarm_clock: {mention}Reminder: discovery call with "
+                        f"*{who}* in 1 hour ({display(b.starts_at, 'Europe/London')}). "
+                        f"Topic: {b.topic or 'n/a'}",
+                        "urgency": "normal",
+                    },
+                    key,
+                )
+
+            if contact is None or not contact.email:
+                return "skipped: no email"
+            blocked = (
+                await s.execute(
+                    select(DoNotContact.id).where(
+                        DoNotContact.channel == "email", DoNotContact.address == contact.email
+                    )
+                )
+            ).first()
+            if blocked:
+                return "skipped: do-not-contact"
+            when = display(
+                b.starts_at, payload.get("timezone") or contact.timezone or "Europe/London"
+            )
+            return await send_email(
+                {
+                    "to": contact.email,
+                    "subject": f"Reminder: your discovery call {when}",
+                    "body": f"Hello {(contact.name or '').split(' ')[0] or 'there'},\n\n"
+                    f"A reminder that your discovery call with {consultant.name} is on "
+                    f"{when}.\n\nIf you need to change it, use the chat on our website.\n\n"
+                    "Acme IT Consulting",
+                },
+                key,
+            )
+
+    return remind
+
+
 def build_handlers(
     sm: async_sessionmaker[AsyncSession],
     *,
     crm: CRMAdapter | None = None,
     calendar: CalendarAdapter | None = None,
+    tickets: TicketAdapter | None = None,
 ) -> dict[str, Handler]:
+    calendar = calendar or build_calendar()
     return {
         "email.send": send_email,
         "slack.notify": slack_notify,
-        "calendar.create_event": make_calendar_handler(sm, calendar or build_calendar()),
+        "calendar.create_event": make_calendar_handler(sm, calendar),
+        "calendar.cancel_event": make_calendar_cancel_handler(sm, calendar),
         "crm.sync": make_crm_handler(sm, crm or build_crm()),
+        "booking.reminder": make_reminder_handler(sm),
+        **make_ticket_handlers(sm, tickets or build_ticketing()),
     }

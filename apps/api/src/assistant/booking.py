@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant.integrations.calendar import CalendarAdapter
 from assistant.models import Booking, BookingStatus, Consultant
+from assistant.workdays import is_working_day
 
 
 @dataclass
@@ -52,7 +53,7 @@ def candidate_starts(
     day = max(first.astimezone(tz).date(), earliest or date.min)
     out: list[datetime] = []
     while day <= last.astimezone(tz).date():
-        if day.weekday() in rules["days"]:
+        if is_working_day(day, rules):
             t = datetime.combine(day, _hm(rules["start"]), tz)
             end_of_day = datetime.combine(day, _hm(rules["end"]), tz)
             while t + dur <= end_of_day:

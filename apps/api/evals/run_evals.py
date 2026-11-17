@@ -18,6 +18,7 @@ import re
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -31,13 +32,54 @@ from assistant.kb import public as kb
 from assistant.kb.embeddings import build_embedder
 from assistant.llm.factory import build_chain
 from assistant.llm.fake import FakeProvider
-from assistant.models import Base, Booking, Consultant, Conversation, Message
+from assistant.models import Base, Booking, Conversation, Handover, Message
 from assistant.orchestrator import Orchestrator
+from assistant.seed import seed_session
 from assistant.settings import get_settings
 from assistant.tools import ToolRegistry, build_tools
 from evals.cases import CASES, Case
 
 RESULTS = Path(__file__).parent / "results"
+# Models often use typographic characters ("H‑502", "don’t"); compare on plain ASCII.
+_TYPOGRAPHY = str.maketrans(
+    {"‐": "-", "‑": "-", "‒": "-", "–": "-", "‘": "'", "’": "'", " ": " ", " ": " "}
+)
+
+
+class TokenPacer:
+    """Keeps the run under the free tier's per-minute token limit (8k/model on Groq) by
+    waiting before a turn while the last 60 seconds' usage is over budget."""
+
+    def __init__(self, budget_per_minute: int):
+        self.budget = budget_per_minute
+        self.window: deque[tuple[float, int]] = deque()
+        self.seen: dict[uuid.UUID, int] = {}
+
+    def _used(self) -> int:
+        now = time.monotonic()
+        while self.window and now - self.window[0][0] > 60:
+            self.window.popleft()
+        return sum(t for _, t in self.window)
+
+    def record(self, tokens: int) -> None:
+        if tokens > 0:
+            self.window.append((time.monotonic(), tokens))
+
+    async def wait(self) -> None:
+        """Sleep exactly until enough of the window has expired to be back under budget."""
+        excess = self._used() - self.budget
+        if excess <= 0:
+            return
+        freed = 0
+        for ts, tokens in self.window:  # oldest first
+            freed += tokens
+            if freed >= excess:
+                await asyncio.sleep(max(0.0, ts + 60 - time.monotonic()) + 0.5)
+                return
+
+
+# ~one model's worth of headroom, leaving room for a turn's 2-3 calls on top.
+PACER = TokenPacer(budget_per_minute=6000)
 
 
 async def prepare(url: str):
@@ -51,13 +93,7 @@ async def prepare(url: str):
     embedder = build_embedder()
     async with sm() as s:
         await kb.ingest_dir(s, embedder, Path(get_settings().kb_content_dir))
-        s.add_all(
-            [
-                Consultant(name="Cora Consultant", email="cora@example.com", skills=["discovery"]),
-                Consultant(name="Sam Security", email="sam@example.com", skills=["discovery"]),
-            ]
-        )
-        await s.commit()
+        await seed_session(s)  # consultants + two fictional client companies (commits)
     return engine, sm, embedder
 
 
@@ -81,13 +117,22 @@ async def run_case(sm, orch: Orchestrator, case: Case) -> dict:
     before = blocks_total()
     started = time.perf_counter()
     for turn in case.turns:
+        await PACER.wait()
         async with sm() as s:
             result = await orch.handle_turn(s, conv.id, turn)
+            used = (
+                await s.execute(
+                    select(
+                        func.coalesce(func.sum(Message.tokens_in + Message.tokens_out), 0)
+                    ).where(Message.conversation_id == conv.id)
+                )
+            ).scalar_one()
+        PACER.record(used - PACER.seen.get(conv.id, 0))
+        PACER.seen[conv.id] = used
         replies.append(result.reply)
         degraded += result.degraded
         if result.provider:
             providers.add(result.provider)
-        await asyncio.sleep(1.0)  # be gentle with free-tier rate limits
     elapsed = time.perf_counter() - started
     blocked = blocks_total() - before
 
@@ -101,6 +146,11 @@ async def run_case(sm, orch: Orchestrator, case: Case) -> dict:
                 )
             ).scalars()
         )
+        handovers = set(
+            (
+                await s.execute(select(Handover.reason).where(Handover.conversation_id == conv.id))
+            ).scalars()
+        )
         bookings = (
             await s.execute(
                 select(func.count()).select_from(Booking).where(Booking.conversation_id == conv.id)
@@ -108,6 +158,7 @@ async def run_case(sm, orch: Orchestrator, case: Case) -> dict:
         ).scalar_one()
 
     failures: list[str] = []
+    replies = [r.translate(_TYPOGRAPHY) for r in replies]
     if degraded:  # a fallback "having trouble" reply is not a pass, whatever it says
         failures.append(f"model unavailable on {degraded} turn(s) (rate limit / error)")
     for t in case.tools_called:
@@ -122,6 +173,8 @@ async def run_case(sm, orch: Orchestrator, case: Case) -> dict:
                 failures.append(f"reply matched forbidden /{pat}/")
     if case.no_guardrail and blocked:
         failures.append(f"guardrail had to replace {int(blocked)} reply(ies)")
+    if case.handover_reason and case.handover_reason not in handovers:
+        failures.append(f"no {case.handover_reason} handover (got {sorted(handovers)})")
     if case.booking_made and not bookings:
         failures.append("no booking was created")
 
@@ -152,6 +205,10 @@ async def main() -> int:
         print("LLM_CHAIN is 'fake'. Set GROQ_API_KEY and LLM_CHAIN=groq,gemini in .env first.")
         return 2
 
+    # Deterministic verification codes so scripted conversations can "read their email".
+    from assistant import identity
+
+    identity.secrets.randbelow = lambda n: 739214
     engine, sm, embedder = await prepare(url)
     orch = Orchestrator(llm, ToolRegistry(build_tools(embedder, LocalCalendar())))
     print(f"Running {len(cases)} cases with {llm.name} on {url.rsplit('/', 1)[-1]}\n")

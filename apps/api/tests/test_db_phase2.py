@@ -170,7 +170,9 @@ async def test_booking_happy_path_and_retry_is_deduplicated(sm):
     assert await count(sm, Booking) == 1
     async with sm() as s:
         kinds = sorted((await s.execute(select(OutboxItem.kind))).scalars())
-    assert kinds == ["calendar.create_event", "crm.sync", "email.send"]
+    immediate = [k for k in kinds if k != "booking.reminder"]
+    assert immediate == ["calendar.create_event", "crm.sync", "email.send", "slack.notify"]
+    assert 1 <= kinds.count("booking.reminder") <= 2  # consultant 1h; client 24h if still ahead
 
 
 async def test_taken_slot_is_not_offered_and_cannot_be_booked(sm):
@@ -264,9 +266,13 @@ async def test_worker_confirms_booking_and_syncs_crm(sm):
     async with sm() as s:
         booking = (await s.execute(select(Booking))).scalar_one()
         contact = (await s.execute(select(Contact))).scalar_one()
-        statuses = set((await s.execute(select(OutboxItem.status))).scalars())
+        statuses = {
+            k: v
+            for k, v in (await s.execute(select(OutboxItem.kind, OutboxItem.status))).all()
+            if k != "booking.reminder"
+        }
     assert booking.status == "confirmed" and booking.calendar_event_id.startswith("local:")
-    assert statuses == {"done"}
+    assert set(statuses.values()) == {"done"}  # reminders stay scheduled for later
     assert crm.calls[0].email == "jo@example.com" and contact.hubspot_id == "42"
     assert "Your discovery call" in sent[0]["subject"] and "Cloud migration" in sent[0]["body"]
 

@@ -79,7 +79,14 @@ Every handover sends: who the customer is, CRM link, verified status, reason, a 
 Email or phone is matched against HubSpot contacts, then a 6-digit one-time code goes to the email on file (valid 10 minutes, 3 attempts). Until verified, the assistant shares no ticket, project or account details.
 
 ## 7. Messaging limits *(default)*
-Outbound messages (email, Telegram) only 09:00–19:00 in the **recipient's** timezone, Mon–Fri, never on public holidays. Do-not-contact list checked first. At most 1 reminder 24 hours before and 1 reminder 1 hour before each booking, enforced by idempotency keys.
+**Who gets what** *(decided 2026-11-16)*:
+
+| Message | Client / visitor | Consultant (team) |
+|---|---|---|
+| Booking confirmation | Email, at booking | Slack, at booking |
+| Reminder | Email, 24 hours before | Slack, 1 hour before |
+
+Client emails go out only 09:00–19:00 in the **recipient's** timezone, Mon–Fri, never on public holidays; the do-not-contact list is checked first. A 24-hour reminder that would fall outside those hours is sent at the start of the previous allowed window instead. Slack messages to the team are not time-restricted. Every confirmation and reminder is sent at most once, enforced by idempotency keys.
 
 ## 8. Internal content audit
 Since this is a portfolio project, we'll **create a synthetic corpus** in Phase 5: about 30 documents across 3 fictional clients (proposals, technical docs, SOPs, case studies, templates), each tagged with `client_id` and `sensitivity` (public / internal / client-confidential). The leakage tests depend on having more than one client.

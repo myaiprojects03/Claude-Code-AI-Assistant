@@ -1,6 +1,6 @@
-"""Tools for the public channels (website chat; Telegram/WhatsApp later)."""
+"""Tools for the public channels (website chat; WhatsApp later, optional)."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -8,7 +8,7 @@ from pydantic import AwareDatetime, BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import select
 
 from assistant import booking as bk
-from assistant import config_store, leads
+from assistant import config_store, leads, reminders
 from assistant.integrations.calendar import CalendarAdapter
 from assistant.kb import public as kb
 from assistant.kb.embeddings import Embedder
@@ -16,7 +16,7 @@ from assistant.models import Booking, BookingStatus, Consultant
 from assistant.qualification import BudgetRange, CompanySize, NeedCategory, Role, Timeline
 from assistant.tools.registry import OutboxSpec, Planned, Tool, ToolContext, ToolRejected
 
-PUBLIC = {"web", "telegram", "whatsapp"}
+PUBLIC = {"web", "whatsapp"}
 
 
 def _tz(name: str) -> str:
@@ -195,7 +195,8 @@ class BookDiscoveryCall(Tool):
         if existing:
             raise ToolRejected(
                 f"A call is already booked for {bk.display(existing.starts_at, args.timezone)}. "
-                "Changing it needs a consultant; offer to pass the request on."
+                "To change it, verify their email (send_verification_code) and use "
+                "reschedule_booking or cancel_booking."
             )
 
         contact = await leads.upsert_contact(
@@ -217,6 +218,8 @@ class BookDiscoveryCall(Tool):
             raise ToolRejected(f"Sorry, {e}. Call find_available_slots and offer others.") from e
 
         consultant = await s.get(Consultant, booking.consultant_id)
+        if contact is not None:
+            contact.timezone = args.timezone  # reminders go out in their local hours
         lead = await leads.get_or_create_lead(s, ctx.conversation_id)
         await leads.update_lead(s, lead, {})
         await leads.queue_crm_sync(s, lead, contact)
@@ -227,8 +230,13 @@ class BookDiscoveryCall(Tool):
             f"Hello {args.name.split()[0]},\n\n"
             f"Thank you for booking a discovery call with Acme IT Consulting.\n\n"
             f"When: {when}\nWith: {consultant.name}\nTopic: {args.topic}\n\n"
-            "We'll send a video link before the call. If you need to change the time, just "
-            "reply to this email.\n\nKind regards,\nAcme IT Consulting"
+            "We'll send a video link before the call and a reminder the day before. To change "
+            "the time, use the chat on our website or reply to this email.\n\nKind regards,\n"
+            "Acme IT Consulting"
+        )
+        hours = await config_store.get_value(s, "messaging.hours")
+        messages = reminders.booking_messages(
+            booking, contact, consultant, args.timezone, hours, datetime.now(UTC)
         )
         return Planned(
             effects=[
@@ -237,6 +245,7 @@ class BookDiscoveryCall(Tool):
                     "email.send",
                     {"to": args.email, "subject": f"Your discovery call: {when}", "body": body},
                 ),
+                *messages,
             ],
             result={
                 "booked": when,

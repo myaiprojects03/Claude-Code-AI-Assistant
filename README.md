@@ -6,7 +6,9 @@ free and open-source tools. See [docs/phase-0](docs/phase-0/README.md) for the d
 ## Status
 - [x] Phase 0: discovery and decisions
 - [x] Phase 1: foundation
-- [x] Phase 2: client chat assistant MVP ([docs](docs/phase-2/README.md)): widget, knowledge base, qualification, booking, guardrails. 98 tests passing.
+- [x] Phase 2: client chat assistant MVP ([docs](docs/phase-2/README.md)): widget, knowledge base, qualification, booking, guardrails.
+- [x] Phase 3: existing-client support and handover ([docs](docs/phase-3/README.md)): verification, tickets, projects, rescheduling, reminders, handover routing, public holidays, real Slack + Jira. 148 tests and 24/24 evals passing.
+- ~~Phase 4: voice agent~~ (removed from scope)
 
 ## Quick start (Windows)
 

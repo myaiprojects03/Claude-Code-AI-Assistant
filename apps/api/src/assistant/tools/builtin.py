@@ -8,7 +8,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 from assistant.tools.registry import OutboxSpec, Planned, Tool, ToolContext
 
-ALL_CHANNELS = {"web", "telegram", "whatsapp", "internal"}
+ALL_CHANNELS = {"web", "whatsapp", "internal"}
 
 
 class CurrentTimeArgs(BaseModel):

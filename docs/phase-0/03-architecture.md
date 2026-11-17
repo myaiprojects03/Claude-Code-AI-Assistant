@@ -3,7 +3,7 @@
 ```
                 ┌──────────── Channels ─────────────┐
  Website ─► Chat widget (Preact) ─┐                 │
- Telegram / WhatsApp test ────────┤                 │
+ WhatsApp test (optional) ────────┤                 │
  Staff ─► Internal assistant + Admin dashboard (Next.js, Keycloak SSO)
                                   │
                                   ▼
@@ -23,7 +23,7 @@
                    (app data, vectors, logs)       │ at-least-once + dedupe
                                                    ▼
                    HubSpot · Jira SM · Google Calendar · Brevo/Mailpit
-                   Slack · Telegram
+                   Slack
 
  Observability: Langfuse (LLM traces) · Grafana/Loki/Prometheus → Slack alerts
 ```

@@ -2,7 +2,9 @@
 
 Rule: every component is open source, self-hosted, or on a free-forever tier. Anything that would cost money is out of scope.
 
-> **Scope change (2026-11-13):** the **voice/call system is removed** from this project: no phone agent, no Twilio, no browser calling, no speech-to-text or text-to-speech. Booking confirmations and reminders go out by email and Telegram instead.
+> **Scope change (2026-11-13):** the **voice/call system is removed** from this project: no phone agent, no Twilio, no browser calling, no speech-to-text or text-to-speech. Booking confirmations and reminders go out by email instead.
+
+> **Scope change (2026-11-16):** **Telegram is removed.** Clients get confirmations and reminders by email; consultants get booking confirmations and reminders in Slack.
 
 Dev machine: i5-8500 (6 cores), 32 GB RAM, no NVIDIA GPU, Docker not yet installed.
 
@@ -22,7 +24,7 @@ Dev machine: i5-8500 (6 cores), 32 GB RAM, no NVIDIA GPU, Docker not yet install
 | Calendar | **Google Calendar API** (personal Google account) | Free API with free/busy lookup and event creation | Cal.com self-hosted |
 | Email (send) | **Brevo free** (300 emails a day) for real sends, **Mailpit** locally | Both free; Mailpit catches every dev email so nothing reaches real inboxes | Gmail SMTP with an app password |
 | Team chat | **Slack Free** (bot + Block Kit) | Bot tokens and webhooks are free; the 90-day history limit doesn't matter here | Discord webhooks |
-| Messaging | **Telegram Bot** (free) + optional **WhatsApp Cloud API test number** | Telegram is free with no limits. The WhatsApp test number is free for up to 5 verified recipients. | Email only |
+| Messaging | **Email** to clients, **Slack** to the team; optional **WhatsApp Cloud API test number** | Free. The WhatsApp test number is free for up to 5 verified recipients. *(Telegram removed 2026-11-16.)* | — |
 | Auth / SSO / roles | **Keycloak** (self-hosted OIDC) | Real SSO and role-based access, free | Authentik |
 | Web chat widget | **Preact + Vite** (one small embeddable JS file) | Small bundle that drops into any site | — |
 | Admin dashboard + internal assistant UI | **Next.js + shadcn/ui** | Free, quick to build | React + Vite |

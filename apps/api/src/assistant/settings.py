@@ -75,6 +75,17 @@ class Settings(BaseSettings):
     calendar_provider: str = "local"  # local (DB bookings only) | google
     google_service_account_file: str = ""
 
+    # Ticketing
+    ticketing_provider: str = "local"  # local (DB only) | jira
+    jira_base_url: str = ""  # e.g. https://yourteam.atlassian.net
+    jira_email: str = ""
+    jira_api_token: str = ""
+    jira_project_key: str = "SUP"
+    jira_issue_type: str = "Task"  # must exist in the project (see assistant-check-integrations)
+
+    # Links in handover messages (Phase 6 dashboard)
+    dashboard_url: str = "http://localhost:3000"
+
     # Public web chat
     allowed_origins: str = "http://localhost:5173,http://localhost:3000"
     rate_limit_per_minute: int = 20  # per client IP on public chat endpoints

@@ -5,7 +5,7 @@ is a one-line migration rather than an ALTER TYPE.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -15,8 +15,10 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Computed,
+    Date,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     MetaData,
@@ -68,7 +70,6 @@ def _updated() -> Mapped[datetime]:
 
 class Channel(StrEnum):
     web = "web"
-    telegram = "telegram"
     whatsapp = "whatsapp"
     internal = "internal"
 
@@ -112,6 +113,13 @@ class Urgency(StrEnum):
     p1 = "p1"
 
 
+class TicketPriority(StrEnum):
+    low = "low"
+    normal = "normal"
+    high = "high"
+    urgent = "urgent"
+
+
 class IntentStatus(StrEnum):
     pending = "pending"
     done = "done"
@@ -153,6 +161,8 @@ class Company(Base):
     size_band: Mapped[str | None] = mapped_column(String(20))
     is_enterprise: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     hubspot_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    # Enterprise accounts: escalations go straight to this person.
+    account_manager_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("consultants.id"))
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
 
@@ -166,7 +176,6 @@ class Contact(Base):
     company_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("companies.id"))
     is_client: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     timezone: Mapped[str | None] = mapped_column(String(64))
-    telegram_chat_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     hubspot_id: Mapped[str | None] = mapped_column(String(64), unique=True)
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
@@ -293,25 +302,74 @@ class Booking(Base):
     updated_at: Mapped[datetime] = _updated()
 
 
-class TicketRef(Base):
-    __tablename__ = "tickets_ref"
-    __table_args__ = (UniqueConstraint("system", "external_id", name="uq_tickets_ref_ext"),)
+class Ticket(Base):
+    """Support tickets. Our table is the source of truth for *who owns* a ticket (so a client
+    can only ever see their own company's tickets); Jira, when connected, mirrors it."""
+
+    __tablename__ = "tickets"
+    __table_args__ = (
+        _check_in("priority", TicketPriority),
+        UniqueConstraint("system", "external_id", name="uq_tickets_ext"),
+    )
     id: Mapped[uuid.UUID] = _uuid_pk()
+    number: Mapped[int] = mapped_column(Integer, Identity(start=1001), unique=True)
+    company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id"), index=True)
     contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contacts.id"), index=True)
     conversation_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("conversations.id"))
-    system: Mapped[str] = mapped_column(String(40), default="jira")
-    external_id: Mapped[str] = mapped_column(String(64))
-    summary: Mapped[str | None] = mapped_column(String(500))
-    status: Mapped[str | None] = mapped_column(String(60))
+    summary: Mapped[str] = mapped_column(String(300))
+    description: Mapped[str | None] = mapped_column(Text)
+    priority: Mapped[str] = mapped_column(String(10), default=TicketPriority.normal)
+    status: Mapped[str] = mapped_column(String(60), default="Open")
+    system: Mapped[str] = mapped_column(String(20), default="local")  # local | jira
+    external_id: Mapped[str | None] = mapped_column(String(64))
+    updates: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
     created_at: Mapped[datetime] = _created()
     updated_at: Mapped[datetime] = _updated()
+
+    @property
+    def ref(self) -> str:
+        return f"T-{self.number}"
+
+
+class Project(Base):
+    """Client projects, for "how's my project going?" questions (verified clients only)."""
+
+    __tablename__ = "projects"
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    company_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(40))  # on track | at risk | delayed | complete
+    summary: Mapped[str | None] = mapped_column(Text)  # client-safe latest update
+    next_milestone: Mapped[str | None] = mapped_column(String(200))
+    next_milestone_date: Mapped[date | None] = mapped_column(Date)
+    lead_consultant_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("consultants.id"))
+    updated_at: Mapped[datetime] = _updated()
+
+
+class VerificationCode(Base):
+    """One-time codes proving a visitor controls an email address. Only a hash is stored."""
+
+    __tablename__ = "verification_codes"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contacts.id"))
+    email: Mapped[str] = mapped_column(String(320))
+    code_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created()
 
 
 class Handover(Base):
     __tablename__ = "handovers"
     __table_args__ = (_check_in("status", HandoverStatus), _check_in("urgency", Urgency))
     id: Mapped[uuid.UUID] = _uuid_pk()
+    number: Mapped[int] = mapped_column(Integer, Identity(start=501), unique=True)
     conversation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("conversations.id"), index=True)
+    contact_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("contacts.id"))
     reason: Mapped[str] = mapped_column(String(80))
     urgency: Mapped[str] = mapped_column(String(10), default=Urgency.normal)
     route_to: Mapped[str] = mapped_column(String(200))  # consultant email / slack channel
@@ -319,6 +377,11 @@ class Handover(Base):
     status: Mapped[str] = mapped_column(String(20), default=HandoverStatus.open)
     created_at: Mapped[datetime] = _created()
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64))
+
+    @property
+    def ref(self) -> str:
+        return f"H-{self.number}"
 
 
 # ---------- Reliability: intents + outbox ----------
@@ -482,7 +545,7 @@ class DoNotContact(Base):
     __tablename__ = "do_not_contact"
     __table_args__ = (UniqueConstraint("channel", "address", name="uq_dnc_channel_address"),)
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    channel: Mapped[str] = mapped_column(String(20))  # email | telegram | whatsapp
+    channel: Mapped[str] = mapped_column(String(20))  # email | whatsapp
     address: Mapped[str] = mapped_column(String(320))
     reason: Mapped[str | None] = mapped_column(String(200))
     created_at: Mapped[datetime] = _created()

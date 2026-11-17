@@ -61,3 +61,4 @@ jobs:
       - run: npm run build
       - name: Bundle stays small
         run: test $(stat -c%s dist/assistant-chat.js) -lt 60000
+

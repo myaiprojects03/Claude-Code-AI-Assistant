@@ -18,5 +18,4 @@
 - [ ] Atlassian free site with Jira Service Management
 - [ ] Google Cloud project (free) with the Calendar API enabled, and an OAuth client
 - [ ] Slack free workspace + app/bot
-- [ ] Telegram bot via @BotFather
 - [ ] Brevo free account (only for real email sends later)

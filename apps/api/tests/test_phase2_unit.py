@@ -214,6 +214,7 @@ async def test_hubspot_creates_contact_and_note():
     )
     note = respx.post("https://api.hubapi.com/crm/v3/objects/notes").respond(json={"id": "9"})
     assert await hubspot().upsert_lead(LEAD, "k" * 64) == "hubspot:contact:501"
+    assert create.calls.last.request.headers["authorization"] == "Bearer tok"
     props = json.loads(create.calls.last.request.content)["properties"]
     assert props["firstname"] == "Jo" and props["hs_lead_status"] == "OPEN"
     body = json.loads(note.calls.last.request.content)

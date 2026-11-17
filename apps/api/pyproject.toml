@@ -22,6 +22,7 @@ dependencies = [
   "structlog>=24.4",
   "prometheus-client>=0.21",
   "fastembed>=0.4",
+  "holidays>=0.60",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,7 @@ dev = [
 assistant-worker = "assistant.outbox.worker:main"
 assistant-ingest = "assistant.kb.public:main"
 assistant-seed = "assistant.seed:main"
+assistant-check-integrations = "assistant.check_integrations:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -57,3 +59,4 @@ ignore = ["B008"]  # FastAPI Depends() in defaults
 
 [tool.ruff.lint.per-file-ignores]
 "src/assistant/config_store.py" = ["E501"]  # prompt prose
+"src/assistant/seed.py" = ["E501"]  # demo prose

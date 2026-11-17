@@ -43,6 +43,8 @@ class CalendarAdapter(Protocol):
 
     async def create_event(self, event: EventSpec) -> str: ...
 
+    async def cancel_event(self, calendar_id: str, event_ref: str) -> None: ...
+
 
 class LocalCalendar:
     name = "local"
@@ -52,6 +54,9 @@ class LocalCalendar:
 
     async def create_event(self, event: EventSpec) -> str:
         return f"local:{event.event_id[:16]}"
+
+    async def cancel_event(self, calendar_id: str, event_ref: str) -> None:
+        return None
 
 
 class GoogleCalendar:
@@ -133,3 +138,13 @@ class GoogleCalendar:
             raise PermanentError(f"google rejected event: {r.status_code} {r.text[:200]}")
         r.raise_for_status()
         return f"google:{r.json()['id']}"
+
+    async def cancel_event(self, calendar_id: str, event_ref: str) -> None:
+        event_id = event_ref.split(":", 1)[-1]
+        r = await self._client.delete(
+            f"{GOOGLE_API}/calendars/{calendar_id}/events/{event_id}",
+            headers=await self._headers(),
+        )
+        if r.status_code in (404, 410):  # already gone: idempotent success
+            return
+        r.raise_for_status()

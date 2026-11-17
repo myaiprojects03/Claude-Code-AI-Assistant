@@ -6,14 +6,19 @@ support, an internal knowledge assistant, integrations, and an admin dashboard.
 ## Hard rules
 - **Free stack only.** Every dependency must be open source, self-hosted, or free-forever. If
   something would cost money, stop and flag it. Decisions: `docs/phase-0/01-stack-decisions.md`.
-- **No voice/calling features** (removed from scope). Reminders go by email and Telegram.
+- **No voice/calling features** (removed from scope). Telegram is out of scope too. Clients get
+  confirmations and reminders by email; the team gets them in Slack.
 - **The Claude adapter stays disabled.** Default LLM chain: Groq → Gemini; Ollama for internal or
   confidential data and offline work.
 - **Never cause external side effects from a tool.** Side-effecting tools return `Planned(effects)`;
   the outbox worker performs them. Read-only lookups (e.g. calendar free/busy) are fine.
   This is what guarantees no duplicate bookings or messages.
 - **Client data separation.** Internal retrieval must filter by role and client *before* the
-  vector search. Never put another client's data in a prompt.
+  vector search. Never put another client's data in a prompt. Client tools filter by the
+  *verified* contact's company and answer "not found" for other clients' records.
+- **Verification before client data.** Tools that touch a client's tickets, projects or bookings
+  set `requires_verification = True`: the model doesn't see them, and they're refused, until
+  `verify_code` succeeds. Never reveal whether an email belongs to a client.
 - Public assistant rules (no prices, no promises, honest "I don't know") live in
   `config_store.DEFAULTS` and the `config_versions` table. Change prompts there, not in code.
 
@@ -24,8 +29,11 @@ apps/api/src/assistant/
   llm/            LLMProvider interface; openai_compat (groq/gemini/ollama), anthropic (off), fake
   tools/          ToolRegistry (+ idempotency, savepoints, ToolRejected), builtin + public tools
   kb/             embeddings (fastembed / hash) and the public knowledge base
-  integrations/   CRM (local/hubspot) and calendar (local/google) adapters
+  tools/clients.py  verification, tickets, projects, bookings, request_handover
+  integrations/   CRM (local/hubspot), calendar (local/google), ticketing (local/jira) adapters
   booking.py      slots and reservation   leads.py  contacts, leads, CRM sync
+  identity.py     email + one-time code   reminders.py  confirmations and scheduled reminders
+  handover.py     triggers, routing, Slack/email notification, office-hours promises
   qualification.py  deterministic lead rules   guardrails.py  reply safety net
   outbox/         worker (SKIP LOCKED, backoff, dead-letter, alerts) + handlers
   orchestrator.py one brain for all channels

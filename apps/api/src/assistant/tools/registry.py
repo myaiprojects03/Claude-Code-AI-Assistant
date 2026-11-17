@@ -9,6 +9,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, ClassVar
 
 import structlog
@@ -31,6 +32,7 @@ class ToolContext:
     session: AsyncSession
     conversation_id: uuid.UUID
     channel: str
+    verified: bool = False
     actor_id: str | None = None
     roles: set[str] = field(default_factory=set)
 
@@ -39,6 +41,7 @@ class ToolContext:
 class OutboxSpec:
     kind: str
     payload: dict[str, Any]
+    not_before: datetime | None = None  # scheduled effects (e.g. reminders)
 
 
 @dataclass
@@ -60,6 +63,8 @@ class Tool:
     args_model: ClassVar[type[BaseModel]]
     channels: ClassVar[set[str]]  # where the tool is offered
     side_effect: ClassVar[bool] = False
+    # Only offered (and only runnable) once the visitor has verified their identity.
+    requires_verification: ClassVar[bool] = False
 
     def spec(self) -> ToolSpec:
         schema = self.args_model.model_json_schema()
@@ -93,6 +98,7 @@ async def enqueue(
     *,
     key: str,
     intent_id: uuid.UUID | None = None,
+    not_before: datetime | None = None,
 ) -> bool:
     """Add an outbox item unless one with this key already exists. Returns True if added."""
     res = await session.execute(
@@ -103,6 +109,7 @@ async def enqueue(
             kind=kind,
             payload=payload,
             max_attempts=get_settings().outbox_max_attempts,
+            **({"next_attempt_at": not_before} if not_before else {}),
         )
         .on_conflict_do_nothing(index_elements=["idempotency_key"])
         .returning(OutboxItem.id)
@@ -117,8 +124,12 @@ class ToolRegistry:
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
-    def specs_for(self, channel: str) -> list[ToolSpec]:
-        return [t.spec() for t in self._tools.values() if channel in t.channels]
+    def specs_for(self, channel: str, verified: bool = False) -> list[ToolSpec]:
+        return [
+            t.spec()
+            for t in self._tools.values()
+            if channel in t.channels and (verified or not t.requires_verification)
+        ]
 
     async def execute(self, ctx: ToolContext, call: ToolCall) -> dict[str, Any]:
         """Never raises for model mistakes; returns an error payload the model can read."""
@@ -126,6 +137,9 @@ class ToolRegistry:
         if tool is None or ctx.channel not in tool.channels:
             metrics.TOOL_CALLS.labels(tool=call.name, outcome="unknown").inc()
             return {"error": f"tool '{call.name}' is not available here"}
+        if tool.requires_verification and not ctx.verified:
+            metrics.TOOL_CALLS.labels(tool=call.name, outcome="unverified").inc()
+            return {"error": "Verify the visitor first: send_verification_code, then verify_code."}
         try:
             args = tool.args_model.model_validate(call.arguments)
         except ValidationError as e:
@@ -184,7 +198,12 @@ class ToolRegistry:
                 planned = await tool.plan(ctx, args, key)
                 for i, spec in enumerate(planned.effects):
                     await enqueue(
-                        ctx.session, spec.kind, spec.payload, key=f"{key}:{i}", intent_id=intent_id
+                        ctx.session,
+                        spec.kind,
+                        spec.payload,
+                        key=f"{key}:{i}",
+                        intent_id=intent_id,
+                        not_before=spec.not_before,
                     )
         except IntegrityError as e:
             if "uq_tool_intents_idempotency_key" not in str(e.orig):

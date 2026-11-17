@@ -54,9 +54,9 @@ class HubSpotCRM:
     name = "hubspot"
 
     def __init__(self, token: str, client: httpx.AsyncClient | None = None):
-        self._client = client or httpx.AsyncClient(
-            base_url=HUBSPOT_API, timeout=15, headers={"Authorization": f"Bearer {token}"}
-        )
+        self._client = client or httpx.AsyncClient(base_url=HUBSPOT_API, timeout=15)
+        # Always attach auth, including on an injected client.
+        self._client.headers["Authorization"] = f"Bearer {token}"
 
     async def _find_contact(self, email: str) -> str | None:
         r = await self._client.post(

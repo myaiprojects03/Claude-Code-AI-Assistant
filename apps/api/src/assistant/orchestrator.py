@@ -14,7 +14,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from assistant import alerts, config_store, guardrails
+from assistant import alerts, config_store, guardrails, handover
 from assistant.llm.base import LLMError, LLMMessage, LLMProvider, ToolCall
 from assistant.models import Channel, Conversation, ConversationStatus, Message, MessageRole
 from assistant.settings import Settings, get_settings
@@ -110,12 +110,33 @@ class Orchestrator:
         if conv.status == ConversationStatus.closed:
             raise PermissionError("conversation is closed")
 
+        # Rule-based trigger, independent of the model: security incidents page on-call now.
+        turn_note: str | None = None
+        if conv.channel != Channel.internal:
+            rules = await config_store.get_value(session, "handover.rules")
+            if handover.detect_trigger(text, rules) == "security_incident":
+                h, _ = await handover.create_handover(
+                    session,
+                    conv.id,
+                    "security_incident",
+                    f"Visitor reported: {text[:500]}",
+                    step_aside=False,
+                )
+                await session.commit()
+                log.warning("handover.security_trigger", handover=h.ref)
+                turn_note = (
+                    f"SECURITY INCIDENT: our security on-call team has already been alerted "
+                    f"(reference {h.ref}). Tell the visitor it's being treated as urgent and give "
+                    "the reference. Collect their name, email, phone and company and record them "
+                    "with update_lead_profile. Do not troubleshoot or give security advice."
+                )
+
         system_prompt = await config_store.get_value(session, f"prompt.system.{conv.channel}")
-        tool_specs = self.tools.specs_for(conv.channel)
         ctx = ToolContext(
             session=session,
             conversation_id=conv.id,
             channel=conv.channel,
+            verified=conv.verified,
             actor_id=actor_id,
             roles=roles or set(),
         )
@@ -125,6 +146,10 @@ class Orchestrator:
             history = await self._history(session, conv.id)
             msgs = [LLMMessage(role="system", content=system_prompt)]
             msgs += [message_to_llm(m) for m in history]
+            if turn_note:
+                msgs.append(LLMMessage(role="system", content=turn_note))
+            # Recomputed each step: verifying mid-turn unlocks the client tools.
+            tool_specs = self.tools.specs_for(conv.channel, verified=ctx.verified)
             try:
                 resp = await self.llm.chat(msgs, tool_specs or None)
             except LLMError as e:
