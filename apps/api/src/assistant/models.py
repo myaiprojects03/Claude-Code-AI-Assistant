@@ -377,7 +377,13 @@ class Handover(Base):
     status: Mapped[str] = mapped_column(String(20), default=HandoverStatus.open)
     created_at: Mapped[datetime] = _created()
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    acknowledged_by: Mapped[str | None] = mapped_column(String(64))
+    acknowledged_by: Mapped[str | None] = mapped_column(String(64))  # staff sub
+    acknowledged_by_name: Mapped[str | None] = mapped_column(String(200))
+    # A named person this handover is for (e.g. an enterprise account manager), by sign-in
+    # email. None = the general team queue, which any staff member may take.
+    assigned_to: Mapped[str | None] = mapped_column(String(320), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolved_by_name: Mapped[str | None] = mapped_column(String(200))
 
     @property
     def ref(self) -> str:

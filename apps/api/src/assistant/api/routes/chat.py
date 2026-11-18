@@ -1,11 +1,13 @@
 """Public visitor chat (website widget in Phase 2) and internal staff chat."""
 
+import json
 import uuid
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant import audit, config_store
@@ -167,3 +169,89 @@ async def internal_message(
         degraded=result.degraded,
         sources=result.sources,
     )
+
+
+class InternalChat(BaseModel):
+    conversation_id: uuid.UUID
+    created_at: datetime
+    title: str  # the first question
+    turns: int
+
+
+@router.get("/internal/conversations", response_model=list[InternalChat])
+async def list_internal(
+    user: StaffUser = Depends(staff_any), session: AsyncSession = Depends(get_session)
+):
+    """The signed-in staff member's own internal chats, newest first."""
+    first = (
+        select(Message.content)
+        .where(Message.conversation_id == Conversation.id, Message.role == MessageRole.user)
+        .order_by(Message.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    turns = (
+        select(func.count())
+        .where(Message.conversation_id == Conversation.id, Message.role == MessageRole.user)
+        .scalar_subquery()
+    )
+    rows = (
+        await session.execute(
+            select(Conversation.id, Conversation.created_at, first, turns)
+            .where(Conversation.channel == Channel.internal, Conversation.staff_sub == user.sub)
+            .order_by(Conversation.updated_at.desc())
+            .limit(30)
+        )
+    ).all()
+    return [
+        InternalChat(conversation_id=i, created_at=at, title=(t or "New chat")[:120], turns=n)
+        for i, at, t, n in rows
+        if n
+    ]
+
+
+class InternalTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+    sources: list[dict[str, Any]] = []
+
+
+@router.get("/internal/conversations/{conversation_id}", response_model=list[InternalTurn])
+async def get_internal(
+    conversation_id: uuid.UUID,
+    user: StaffUser = Depends(staff_any),
+    session: AsyncSession = Depends(get_session),
+):
+    conv = await session.get(Conversation, conversation_id)
+    if conv is None or conv.channel != Channel.internal or conv.staff_sub != user.sub:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation not found")
+    msgs = (
+        (
+            await session.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    out: list[InternalTurn] = []
+    pending: list[dict[str, Any]] = []  # sources shown to the model for the current turn
+    for m in msgs:
+        if m.role == MessageRole.system and m.tool_name == "context":
+            try:
+                pending = json.loads(m.content or "{}").get("sources", [])
+            except ValueError:
+                pending = []
+        elif m.role == MessageRole.user:
+            out.append(InternalTurn(role="user", content=m.content or "", created_at=m.created_at))
+        elif m.role == MessageRole.assistant and not m.tool_calls and m.content:
+            out.append(
+                InternalTurn(
+                    role="assistant", content=m.content, created_at=m.created_at, sources=pending
+                )
+            )
+            pending = []
+    return out

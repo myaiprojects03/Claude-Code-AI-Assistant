@@ -8,8 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from assistant import alerts, metrics
-from assistant.api.routes import admin, chat, health
+from assistant.api.routes import admin, chat, dashboard, health
 from assistant.db import dispose_engine, init_engine
+from assistant.integrations import TicketAdapter, build_ticketing
 from assistant.kb.embeddings import Embedder, build_embedder
 from assistant.llm.base import LLMProvider
 from assistant.llm.factory import build_chain
@@ -27,6 +28,7 @@ def create_app(
     internal_llm: LLMProvider | None = None,
     tools: ToolRegistry | None = None,
     embedder: Embedder | None = None,
+    ticket_adapter: TicketAdapter | None = None,
     database_url: str | None = None,
 ) -> FastAPI:
     settings = get_settings()
@@ -36,6 +38,8 @@ def create_app(
         configure_logging(json=settings.app_env != "dev")
         init_engine(database_url)
         app.state.embedder = embedder or build_embedder()
+        # Read-only status lookups for the dashboard's Tickets page.
+        app.state.tickets = ticket_adapter or build_ticketing()
         public_llm = llm or build_chain()
         # Internal (confidential) chats default to the local chain; a supplied test model is
         # used for both so tests never need Ollama.
@@ -93,6 +97,7 @@ def create_app(
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(admin.router)
+    app.include_router(dashboard.router)
     return app
 
 

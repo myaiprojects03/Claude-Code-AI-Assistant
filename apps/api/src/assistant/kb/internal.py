@@ -40,6 +40,7 @@ log = structlog.get_logger()
 INTERNAL_DIR = REPO_ROOT / "content" / "internal"
 TOP_K = 5
 MIN_SCORE = 0.35
+RECORD_DOC_MIN_SCORE = 0.68  # documents kept alongside live records (noise scores ~0.6)
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class Source:
             "client": self.client,
             "uri": self.uri,
             "score": self.score,
+            "kind": "document",
         }
 
 
@@ -212,8 +214,24 @@ async def retrieve_for_turn(
     conversation_id: uuid.UUID,
     question: str,
 ) -> tuple[str, list[Source]]:
+    from assistant.kb import records as live
+
     access = await access_for(session, user)
     sources = await search(session, embedder, question, access)
+    named = await mentioned_clients(session, question)
+    # Live records (handovers, leads, calls, tickets) the question names, under the
+    # dashboard's access rules. Numbered after the documents so citations stay unique.
+    recs = await live.lookup(
+        session, user, question, named, None if access.all_clients else access.client_ids
+    )
+    if any(r.focus != "company" for r in recs):
+        # A question about a named person or reference is mostly about the records; keep
+        # only documents that are a strong match, so loosely related ones don't distract.
+        sources = [s for s in sources if s.score >= RECORD_DOC_MIN_SCORE]
+        for i, s in enumerate(sources, start=1):
+            s.n = i
+    for i, r in enumerate(recs, start=len(sources) + 1):
+        r.n = i
     audit.record(
         session,
         actor_type="staff",
@@ -222,12 +240,15 @@ async def retrieve_for_turn(
         target_type="conversation",
         target_id=str(conversation_id),
         documents=sorted({str(s.document_id) for s in sources}),
+        records=[r.title for r in recs],
         all_clients=access.all_clients,
     )
-    note = context_note(sources)
-    if extra := uncovered_client_note(await mentioned_clients(session, question), sources):
+    note = context_note(sources) if sources or not recs else ""
+    if recs:
+        note = f"{note}\n\n{live.records_note(recs)}" if note else live.records_note(recs)
+    if extra := uncovered_client_note(named, [*sources, *recs]):
         note = f"{note}\n\n{extra}"
-    return note, sources
+    return note, [*sources, *recs]
 
 
 # ---------- Ingestion ----------

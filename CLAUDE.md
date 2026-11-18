@@ -46,6 +46,7 @@ apps/api/src/assistant/
   config_store.py versioned no-code config with defaults
   auth.py         Keycloak JWT (staff roles) + visitor session tokens
 apps/widget/      Preact chat widget (single-file build)
+apps/web/         staff dashboard: Vite + React + TS, Keycloak PKCE login, theme in src/styles/app.css
 apps/api/evals/   eval cases + runner against the real model
 content/public/   approved public content (the only source for public answers)
 content/internal/ confidential internal documents (front matter: client, sensitivity, roles)
@@ -54,7 +55,8 @@ docs/phase-N/     phase decisions and docs
 ```
 
 ## Commands (run from apps/api, using the repo venv)
-- Dev stack: `powershell -File ../../scripts/stack.ps1 up|down|status|stop-vm`. Podman data is on
+- Dev stack: `powershell -File ../../scripts/stack.ps1 up|down|status|stop-vm`. `up` also starts
+  the outbox worker in the background (logs in `logs/worker.log`); `down` stops it. Podman data is on
   D:\PodmanData (C: is full), so never call `podman machine` without `XDG_DATA_HOME` set.
   Postgres is on port **5433**.
 - Tests: `../../.venv/Scripts/python -m pytest -q`. DB tests skip unless `TEST_DATABASE_URL` is set
@@ -70,6 +72,9 @@ docs/phase-N/     phase decisions and docs
 - Evals (real model): `../../.venv/Scripts/python -m evals.run_evals [--only id,id] [--dry-run]`
 - Widget: `cd ../widget && npm run dev` (demo at /demo/) or `npm run build`. npm's cache is set
   to D: in `apps/widget/.npmrc`.
+- Dashboard: `cd ../web && npm run dev` (http://localhost:3000; port is fixed by the Keycloak
+  client). Demo data: `../../.venv/Scripts/assistant-seed --demo`. Theme rules:
+  `docs/phase-6/design-system.md` (monochrome, one weight, brightness for emphasis).
 
 ## Conventions
 - Python 3.11+, async everywhere, SQLAlchemy 2 typed models, Pydantic v2, ruff (line length 100).
@@ -77,8 +82,9 @@ docs/phase-N/     phase decisions and docs
 - New side effect: a tool's `plan(ctx, args, key)` returns `Planned([OutboxSpec(kind, payload)])`
   (raise `ToolRejected` to refuse cleanly), and you register a handler in `build_handlers()`
   (`outbox/handlers.py`). A handler raises `PermanentError` for non-retryable failures.
-- Public content changes: edit `content/public/*.md`, then run `assistant-ingest`. Never put
-  prices, dates or guarantees in it.
+- Public content changes: staff edit pages in the dashboard (Website content), stored as
+  `content.public.<slug>` config versions that override `content/public/*.md`; or edit the files
+  and run `assistant-ingest`. Publishing is blocked for prices, rates, guarantees and promises.
 - Every new external integration goes behind an adapter with a fake for tests.
 - Tests: every feature gets unit tests; anything touching SQL gets a `requires_db` test.
 - Staff data access gets an `audit.record(...)` call.

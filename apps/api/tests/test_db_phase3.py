@@ -384,6 +384,7 @@ async def test_enterprise_handover_goes_to_account_manager(sm, clients):
             )
         ).scalar_one_or_none()
     assert "cora@example.com" in h.route_to and email is not None
+    assert h.assigned_to == "cora@example.com"  # hers, not the general team queue
     assert "Verified client: yes" in email["body"] and "(enterprise)" in email["body"]
 
 

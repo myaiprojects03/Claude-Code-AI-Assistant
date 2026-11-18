@@ -56,6 +56,13 @@ export function Widget({ config }) {
   useEffect(() => {
     if (open && session) inputRef.current?.focus();
   }, [open, session]);
+  // The host page can open the chat from its own buttons ("Book a call"):
+  //   window.dispatchEvent(new Event("assistant-chat:open"))
+  useEffect(() => {
+    const onOpen = () => setOpen(true);
+    window.addEventListener("assistant-chat:open", onOpen);
+    return () => window.removeEventListener("assistant-chat:open", onOpen);
+  }, []);
 
   async function startSession() {
     const s = await post(`${config.api}/v1/chat/sessions`, { consent: true });

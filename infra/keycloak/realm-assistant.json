@@ -5,9 +5,18 @@
   "accessTokenLifespan": 900,
   "roles": {
     "realm": [
-      { "name": "admin", "description": "Full access, config publishing" },
-      { "name": "manager", "description": "Views all conversations and analytics" },
-      { "name": "consultant", "description": "Internal assistant, own escalations" }
+      {
+        "name": "admin",
+        "description": "Full access, config publishing"
+      },
+      {
+        "name": "manager",
+        "description": "Views all conversations and analytics"
+      },
+      {
+        "name": "consultant",
+        "description": "Internal assistant, own escalations"
+      }
     ]
   },
   "clients": [
@@ -17,9 +26,15 @@
       "publicClient": true,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
-      "redirectUris": ["http://localhost:3000/*"],
-      "webOrigins": ["http://localhost:3000"],
-      "attributes": { "pkce.code.challenge.method": "S256" },
+      "redirectUris": [
+        "http://localhost:3000/*"
+      ],
+      "webOrigins": [
+        "http://localhost:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
       "protocolMappers": [
         {
           "name": "audience-assistant-api",
@@ -42,8 +57,16 @@
       "emailVerified": true,
       "firstName": "Ada",
       "lastName": "Admin",
-      "credentials": [{ "type": "password", "value": "dev-admin-123", "temporary": false }],
-      "realmRoles": ["admin"]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-admin-123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "admin"
+      ]
     },
     {
       "username": "manager.dev",
@@ -52,8 +75,16 @@
       "emailVerified": true,
       "firstName": "Max",
       "lastName": "Manager",
-      "credentials": [{ "type": "password", "value": "dev-manager-123", "temporary": false }],
-      "realmRoles": ["manager"]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-manager-123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "manager"
+      ]
     },
     {
       "username": "consultant.dev",
@@ -62,8 +93,16 @@
       "emailVerified": true,
       "firstName": "Cora",
       "lastName": "Consultant",
-      "credentials": [{ "type": "password", "value": "dev-consultant-123", "temporary": false }],
-      "realmRoles": ["consultant"]
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-consultant-123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "consultant"
+      ]
     }
   ]
 }

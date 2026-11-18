@@ -19,6 +19,27 @@ documents never leave this machine**: answers come from a local model (Ollama).
 | Fact guard | `grounding.py`, used by the orchestrator | Every internal reply is checked: a key fact (money, percentage, time, date, IP range, code, quantity) that is in neither the sources the model was given nor the person's own messages is replaced with `[TO CONFIRM]` before the reply is shown |
 | Login | Keycloak (staff roles), existing internal chat API | Each internal conversation is private to the staff member who started it |
 
+## Live records (added in Phase 6)
+
+Documents are written knowledge. The assistant can also answer **status questions about live
+records**, such as "what's the status of Alex Bob's query?" or "any update on H-524?" (`kb/records.py`).
+
+- **What it looks up:** a person named in full or by email, a client company named in a status-type question ("anything
+  open for Halcyon?"), or a reference (H-524, T-1003). Only what the question names is looked
+  up, by plain SQL, never by similarity, so records can't drift into unrelated answers. A first name on
+  its own isn't enough.
+- **What it returns:** a "current status" headline, the handovers (who has them), discovery calls,
+  open tickets and, for managers and admins only, the lead's answers. Never transcripts; those stay
+  on the dashboard, where opening one is audited.
+- **Client separation:** anything tied to a client company follows the same client access as that
+  client's documents. A consultant not assigned to Halcyon gets no Halcyon records, and no hint that
+  any exist. Visitors with no client company are visible to all staff, as on the dashboard.
+- **In the answer:** records are numbered after the documents, shown as "Live record" with a link to
+  the dashboard page, audited with the document ids, and checked by the fact guard like any source.
+  For person and reference questions, only documents that are a strong match (score >= 0.68) are kept.
+- **Checked on the real local model:** asked about Alex Bob, both roles got the P1 security handover,
+  who had taken it, and the booked call; only the admin got the lead answers.
+
 ## Safeguards added after the evals
 
 These weren't caught by the unit tests. Running the real local model found them.
@@ -36,7 +57,7 @@ These weren't caught by the unit tests. Running the real local model found them.
 
 ## Results (2026-11-17)
 
-**Automated tests:** 193 passing, including the leak tests in `tests/test_db_phase5.py`:
+**Automated tests:** 193 passing at the end of Phase 5 (219 now), including the leak tests in `tests/test_db_phase5.py`:
 - A Northbridge-only consultant can never retrieve Halcyon or Brightwater text, across 5
   adversarial queries ("ignore your permissions…", "compare all clients"…).
 - An unassigned consultant sees only firm-wide documents.

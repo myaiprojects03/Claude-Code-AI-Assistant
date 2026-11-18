@@ -27,7 +27,7 @@ Dev machine: i5-8500 (6 cores), 32 GB RAM, no NVIDIA GPU, Docker not yet install
 | Messaging | **Email** to clients, **Slack** to the team; optional **WhatsApp Cloud API test number** | Free. The WhatsApp test number is free for up to 5 verified recipients. *(Telegram removed 2026-11-16.)* | — |
 | Auth / SSO / roles | **Keycloak** (self-hosted OIDC) | Real SSO and role-based access, free | Authentik |
 | Web chat widget | **Preact + Vite** (one small embeddable JS file) | Small bundle that drops into any site | — |
-| Admin dashboard + internal assistant UI | **Next.js + shadcn/ui** | Free, quick to build | React + Vite |
+| Admin dashboard + internal assistant UI | **Vite + React + TypeScript**, plain CSS tokens | A staff app behind a login needs no server rendering; same toolchain as the widget. *(Changed in Phase 6 from Next.js + shadcn/ui.)* | Next.js |
 | LLM tracing / evals | **Langfuse** (self-hosted) + **Python eval runner** (`apps/api/evals`) | Langfuse is open source. *(Changed in Phase 2: a small Python runner replaced promptfoo; it needs no extra dependencies and runs the real orchestrator.)* | promptfoo |
 | Logs, metrics, alerts | **Grafana + Loki + Prometheus**, alerts sent to Slack | All open source | GlitchTip for errors |
 | Secrets | **SOPS + age** (encrypted in the repo), `.env` locally | Free and needs no server | Infisical self-hosted |

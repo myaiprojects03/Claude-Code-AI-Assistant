@@ -81,6 +81,19 @@ def check_reply(text: str) -> Verdict:
     return Verdict(True)
 
 
+def find_violations(text: str) -> list[Verdict]:
+    """Every rule match in `text` (not just the first), without counting them as blocks.
+    Used to check public content before it can be published from the dashboard."""
+    text = (text or "").replace("’", "'")
+    found = []
+    for rule, pattern in OUTPUT_RULES.items():
+        for m in pattern.finditer(text):
+            if rule in NEGATABLE and _negated(text, m.start(), m.end()):
+                continue
+            found.append(Verdict(False, rule, m.group(0)))
+    return found
+
+
 def flag_injection(text: str) -> bool:
     hit = bool(INJECTION.search(text or ""))
     if hit:

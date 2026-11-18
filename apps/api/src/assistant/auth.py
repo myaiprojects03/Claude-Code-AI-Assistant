@@ -27,9 +27,14 @@ class StaffUser:
     username: str | None
     email: str | None
     roles: frozenset[str]
+    name: str | None = None  # display name from the token ("Ada Admin")
 
     def has_any(self, *roles: str) -> bool:
         return bool(self.roles.intersection(roles))
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.username or self.email or self.sub
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,7 @@ async def verify_staff_token(token: str) -> StaffUser:
         username=claims.get("preferred_username"),
         email=claims.get("email"),
         roles=roles,
+        name=claims.get("name"),
     )
 
 

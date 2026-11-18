@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from assistant import audit, config_store
+from assistant.auth import StaffUser
 from assistant.models import (
     Company,
     Consultant,
@@ -149,6 +150,7 @@ async def create_handover(
     urgency = urgency or route["urgency"]
 
     owner_note = ""
+    assigned_to: str | None = None  # None = the general team queue
     if (
         company
         and company.is_enterprise
@@ -158,6 +160,7 @@ async def create_handover(
         am = await session.get(Consultant, company.account_manager_id)
         if am:  # enterprise accounts go straight to their account manager
             route["email"] = am.email
+            assigned_to = am.email.lower()
             owner_note = f" (account manager: {am.name})"
             if urgency in ("low", "normal"):
                 urgency = "high"
@@ -201,6 +204,7 @@ async def create_handover(
         reason=reason,
         urgency=urgency,
         route_to=f"{route['slack']} / {route['email']}",
+        assigned_to=assigned_to,
         summary=summary,
         status=HandoverStatus.open,
     )
@@ -246,12 +250,126 @@ async def create_handover(
     return h, True
 
 
-async def acknowledge(session: AsyncSession, handover_id: uuid.UUID, staff_sub: str) -> Handover:
+class HandoverRefused(Exception):
+    """The staff member may not do this to this handover (message is shown to them)."""
+
+
+def may_take(h: Handover, user: StaffUser) -> bool:
+    """Managers and admins take anything. Consultants take the team queue, or handovers
+    assigned to them, never someone else's (e.g. another account manager's client)."""
+    if user.has_any("admin", "manager"):
+        return True
+    return h.assigned_to is None or h.assigned_to == (user.email or "").lower()
+
+
+async def _locked(session: AsyncSession, handover_id: uuid.UUID) -> Handover:
     h = await session.get(Handover, handover_id, with_for_update=True)
     if h is None:
         raise LookupError("handover not found")
+    return h
+
+
+async def acknowledge(session: AsyncSession, handover_id: uuid.UUID, user: StaffUser) -> Handover:
+    """'I'll take it'. The first person wins; later clicks don't change the owner."""
+    h = await _locked(session, handover_id)
     if h.status == HandoverStatus.open:
+        if not may_take(h, user):
+            raise HandoverRefused(
+                f"This handover is for {h.assigned_to}. Ask a manager to reassign it."
+            )
         h.status = HandoverStatus.acknowledged
         h.acknowledged_at = datetime.now(UTC)
-        h.acknowledged_by = staff_sub
+        h.acknowledged_by = user.sub
+        h.acknowledged_by_name = user.display_name
+        # Tell the channel, so nobody else starts on it.
+        await _team_note(session, h, f"Handover {h.ref} taken by {user.display_name}.", "taken")
+    return h
+
+
+async def _team_note(session: AsyncSession, h: Handover, text: str, event: str) -> None:
+    """Slack follow-up in the handover's channel, via the outbox (never sent twice)."""
+    channel = h.route_to.split(" / ")[0]
+    when = (h.resolved_at if event == "resolved" else h.acknowledged_at) or datetime.now(UTC)
+    await enqueue(
+        session,
+        "slack.notify",
+        {
+            "text": f"{text} ({channel})",
+            "urgency": "normal",
+            "conversation_id": str(h.conversation_id),
+        },
+        # The time makes a second take (after a reassign) its own message.
+        key=f"handover:{h.id}:{event}:{when.isoformat()}",
+    )
+
+
+async def resolve(session: AsyncSession, handover_id: uuid.UUID, user: StaffUser) -> Handover:
+    """Done. Managers can close any; consultants close the ones they took, or (if nobody
+    has taken it yet) ones they're allowed to take."""
+    h = await _locked(session, handover_id)
+    if h.status == HandoverStatus.resolved:
+        return h
+    taken_by_me = h.acknowledged_by == user.sub
+    untaken = h.status == HandoverStatus.open
+    if not (user.has_any("admin", "manager") or taken_by_me or (untaken and may_take(h, user))):
+        who = h.acknowledged_by_name or h.assigned_to or "someone else"
+        raise HandoverRefused(f"{who} is handling this one.")
+    if untaken:  # resolved without being taken first: record who dealt with it
+        h.acknowledged_at = datetime.now(UTC)
+        h.acknowledged_by = user.sub
+        h.acknowledged_by_name = user.display_name
+    h.status = HandoverStatus.resolved
+    h.resolved_at = datetime.now(UTC)
+    h.resolved_by_name = user.display_name
+    await session.flush()
+    # Once nothing about this conversation is still waiting for a person, the assistant
+    # answers it again (until then it only says a consultant is looking after it).
+    still_open = (
+        await session.execute(
+            select(Handover.id).where(
+                Handover.conversation_id == h.conversation_id,
+                Handover.status != HandoverStatus.resolved,
+            )
+        )
+    ).first()
+    conv = await session.get(Conversation, h.conversation_id)
+    resumed = (
+        still_open is None and conv is not None and conv.status == ConversationStatus.handed_over
+    )
+    if resumed:
+        conv.status = ConversationStatus.active
+    await _team_note(
+        session,
+        h,
+        f"Handover {h.ref} resolved by {user.display_name}."
+        + (" The assistant is answering this conversation again." if resumed else ""),
+        "resolved",
+    )
+    return h
+
+
+async def reassign(
+    session: AsyncSession, handover_id: uuid.UUID, user: StaffUser, to_email: str | None
+) -> Handover:
+    """Managers and admins pass a handover to a named person (or back to the team queue).
+    It goes back to 'open' for them to take, and they're told in Slack."""
+    if not user.has_any("admin", "manager"):
+        raise HandoverRefused("Only managers and admins can reassign handovers.")
+    h = await _locked(session, handover_id)
+    if h.status == HandoverStatus.resolved:
+        raise HandoverRefused("This handover is already resolved.")
+    h.assigned_to = to_email.strip().lower() if to_email else None
+    h.status = HandoverStatus.open
+    h.acknowledged_at = h.acknowledged_by = h.acknowledged_by_name = None
+    target = h.assigned_to or "the team queue"
+    await enqueue(
+        session,
+        "slack.notify",
+        {
+            "text": f"Handover {h.ref} was reassigned to {target} by {user.display_name}.",
+            "urgency": "high" if h.urgency in ("p1", "high") else "normal",
+            "conversation_id": str(h.conversation_id),
+        },
+        key=f"handover:{h.id}:reassign:{uuid.uuid4()}",
+    )
     return h

@@ -62,3 +62,18 @@ jobs:
       - name: Bundle stays small
         run: test $(stat -c%s dist/assistant-chat.js) -lt 60000
 
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --cache .npm-cache
+      - name: Type-check and build
+        run: npm run build

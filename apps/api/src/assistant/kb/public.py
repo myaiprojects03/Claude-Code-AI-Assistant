@@ -1,8 +1,13 @@
 """Public knowledge base: approved service and FAQ content only.
 
-Source of truth is markdown in content/public/*.md (reviewed like code). Ingestion is
-idempotent: unchanged files are skipped (content hash), edited files are re-chunked, and
-files that were removed are deleted from the index so withdrawn content can't be quoted.
+Pages start as markdown in content/public/*.md. Staff can edit them, or add pages, from the
+dashboard: each page is a versioned config key `content.public.<slug>`, and a published
+version overrides the file. Publishing re-indexes straight away. Ingestion is idempotent:
+unchanged pages are skipped (content hash), edited pages are re-chunked, and pages that no
+longer exist are deleted from the index so withdrawn content can't be quoted.
+
+Every page must pass the same rules as the assistant's replies (no prices, rates,
+guarantees or delivery promises) before it can be saved or published.
 """
 
 import argparse
@@ -16,13 +21,16 @@ import structlog
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from assistant import guardrails
 from assistant.kb.embeddings import Embedder, build_embedder
-from assistant.models import Corpus, Document, PublicChunk, Sensitivity
+from assistant.models import ConfigStatus, ConfigVersion, Corpus, Document, PublicChunk, Sensitivity
 from assistant.settings import get_settings
 
 log = structlog.get_logger()
 
 MAX_CHUNK_CHARS = 1200
+CONTENT_PREFIX = "content.public."
+SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,59}")
 _FRONT = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 
 
@@ -90,14 +98,61 @@ def _split(text: str) -> list[str]:
     return out
 
 
-async def ingest_dir(session: AsyncSession, embedder: Embedder, directory: Path) -> dict[str, int]:
+def uri_for(slug: str) -> str:
+    return f"content/public/{slug}.md"
+
+
+def slug_for(key_or_uri: str) -> str:
+    return Path(key_or_uri.removeprefix(CONTENT_PREFIX)).stem
+
+
+def content_issues(raw: str) -> list[str]:
+    """Why this page can't be published (empty list = fine)."""
+    if not raw.strip():
+        return ["The page is empty."]
+    return [
+        f'{v.rule.replace("_", " ")}: "{v.match}"'
+        for v in guardrails.find_violations(raw)
+        if v.rule and v.match
+    ]
+
+
+async def page_sources(session: AsyncSession, directory: Path) -> dict[str, tuple[str, str]]:
+    """uri -> (markdown, origin). Published dashboard versions override the files."""
+
+    def read() -> dict[str, str]:
+        return {
+            uri_for(f.stem): f.read_text(encoding="utf-8") for f in sorted(directory.glob("*.md"))
+        }
+
+    pages = {uri: (raw, "file") for uri, raw in (await asyncio.to_thread(read)).items()}
+    rows = await session.execute(
+        select(ConfigVersion.key, ConfigVersion.value).where(
+            ConfigVersion.key.startswith(CONTENT_PREFIX),
+            ConfigVersion.status == ConfigStatus.published,
+        )
+    )
+    for key, value in rows.all():
+        if isinstance(value, str) and SLUG.fullmatch(slug_for(key)):
+            pages[uri_for(slug_for(key))] = (value, "dashboard")
+    return pages
+
+
+async def ingest_dir(
+    session: AsyncSession, embedder: Embedder, directory: Path, *, commit: bool = True
+) -> dict[str, int]:
+    pages = await page_sources(session, directory)
+    return await ingest_pages(session, embedder, {u: raw for u, (raw, _) in pages.items()}, commit)
+
+
+async def ingest_pages(
+    session: AsyncSession, embedder: Embedder, pages: dict[str, str], commit: bool = True
+) -> dict[str, int]:
     stats = {"added": 0, "updated": 0, "unchanged": 0, "removed": 0, "chunks": 0}
-    files = await asyncio.to_thread(lambda: sorted(directory.glob("*.md")))
     seen: set[str] = set()
-    for f in files:
-        uri = f"content/public/{f.name}"
+    for uri, raw in sorted(pages.items()):
         seen.add(uri)
-        doc = parse_markdown(uri, await asyncio.to_thread(f.read_text, encoding="utf-8"))
+        doc = parse_markdown(uri, raw)
         existing = (
             await session.execute(
                 select(Document).where(Document.corpus == Corpus.public, Document.source_uri == uri)
@@ -146,7 +201,10 @@ async def ingest_dir(session: AsyncSession, embedder: Embedder, directory: Path)
     for d in gone:
         await session.delete(d)  # chunks cascade
         stats["removed"] += 1
-    await session.commit()
+    if commit:
+        await session.commit()
+    else:
+        await session.flush()
     return stats
 
 
