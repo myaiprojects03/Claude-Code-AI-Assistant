@@ -24,6 +24,13 @@ support, an internal knowledge assistant, integrations, and an admin dashboard.
 - **Verification before client data.** Tools that touch a client's tickets, projects or bookings
   set `requires_verification = True`: the model doesn't see them, and they're refused, until
   `verify_code` succeeds. Never reveal whether an email belongs to a client.
+- **Every staff route declares roles.** Use `require_roles(...)`; `test_db_security.py` walks
+  every route and fails on one without a role check. Only the dashboard's own settings and
+  `content.public.*` are writable through the config API; the system prompts are not.
+- **Tests never touch real services.** `tests/conftest.py` blanks Slack, Jira, CRM, calendar and
+  SMTP settings for every test. Fake adapters only; never rely on `.env` in a test.
+- **Personal data has a lifecycle.** New tables holding personal data must be covered by
+  `privacy.py` (export, erase, retention). Staff data access gets an `audit.record(...)`.
 - Public assistant rules (no prices, no promises, honest "I don't know") live in
   `config_store.DEFAULTS` and the `config_versions` table. Change prompts there, not in code.
 

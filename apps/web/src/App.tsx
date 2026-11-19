@@ -17,6 +17,8 @@ const Settings = lazy(() => import("./pages/Settings"));
 const Content = lazy(() => import("./pages/Content"));
 const Assistant = lazy(() => import("./pages/Assistant"));
 const Access = lazy(() => import("./pages/Access"));
+const Privacy = lazy(() => import("./pages/Privacy"));
+const Audit = lazy(() => import("./pages/Audit"));
 
 function Callback() {
   const navigate = useNavigate();
@@ -29,7 +31,9 @@ function Callback() {
       .signinRedirectCallback()
       .then((u) => {
         const returnTo = (u.state as { returnTo?: string } | undefined)?.returnTo;
-        navigate(returnTo && returnTo !== "/callback" ? returnTo : "/", { replace: true });
+        // Only a plain path inside this app: never "//host" or "/\host" (open redirects).
+        const safe = typeof returnTo === "string" && /^\/(?![/\\])[\w\-/]*$/.test(returnTo) && returnTo !== "/callback";
+        navigate(safe ? returnTo : "/", { replace: true });
       })
       .catch((e: Error) => setError(e.message));
   }, [navigate]);
@@ -80,6 +84,8 @@ export function App() {
           <Route path="/assistant" element={<Assistant />} />
           <Route path="/content" element={<RequireRole roles={["admin", "manager"]}><Content /></RequireRole>} />
           <Route path="/access" element={<RequireRole roles={["admin"]}><Access /></RequireRole>} />
+          <Route path="/privacy" element={<RequireRole roles={["admin"]}><Privacy /></RequireRole>} />
+          <Route path="/audit" element={<RequireRole roles={["admin"]}><Audit /></RequireRole>} />
           <Route path="/settings" element={<RequireRole roles={["admin", "manager"]}><Settings /></RequireRole>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

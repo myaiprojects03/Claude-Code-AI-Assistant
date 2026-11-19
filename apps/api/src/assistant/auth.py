@@ -8,6 +8,7 @@
 import asyncio
 import time
 import uuid
+from contextvars import ContextVar
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -97,10 +98,16 @@ async def get_current_staff(
     return await verify_staff_token(creds.credentials)
 
 
+# The signed-in staff member for this request, so audit rows can name them (ISO 27001 8.15:
+# logs a person can read, not just an account id).
+current_staff: ContextVar[StaffUser | None] = ContextVar("current_staff", default=None)
+
+
 def require_roles(*roles: str):
     async def dep(user: StaffUser = Depends(get_current_staff)) -> StaffUser:
         if not user.has_any(*roles):
             raise HTTPException(status.HTTP_403_FORBIDDEN, "insufficient role")
+        current_staff.set(user)
         return user
 
     return dep

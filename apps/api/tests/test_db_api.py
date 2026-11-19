@@ -128,7 +128,7 @@ async def test_internal_side_effect_tool_goes_through_outbox(sm):
                     ToolCall(
                         "c1",
                         "send_email",
-                        {"to": "client@example.com", "subject": "Follow-up", "body": "Thanks"},
+                        {"to": "colleague@acme.example", "subject": "Follow-up", "body": "Thanks"},
                     )
                 ],
                 "fake",
@@ -147,7 +147,7 @@ async def test_internal_side_effect_tool_goes_through_outbox(sm):
             cid = (await c.post("/v1/internal/conversations")).json()["conversation_id"]
             r = await c.post(
                 f"/v1/internal/conversations/{cid}/messages",
-                json={"text": "Please send it to client@example.com"},
+                json={"text": "Please send it to colleague@acme.example"},
             )
     assert r.json()["reply"] == "Queued the email."
     async with sm() as s:

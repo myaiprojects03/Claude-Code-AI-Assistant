@@ -23,7 +23,7 @@ from assistant.db import get_session
 from assistant.kb import internal as internal_kb
 from assistant.models import Channel, Consent, Conversation, Message, MessageRole
 from assistant.orchestrator import Orchestrator
-from assistant.ratelimit import limit_public
+from assistant.ratelimit import limit_public, limit_staff
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 
@@ -127,6 +127,7 @@ async def internal_message(
     # Same 404 whether missing or someone else's: don't leak existence.
     if conv is None or conv.channel != Channel.internal or conv.staff_sub != user.sub:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation not found")
+    limit_staff(user.sub)
     audit.record(
         session,
         actor_type="staff",
@@ -160,6 +161,7 @@ async def internal_message(
         conversation_id,
         body.text,
         actor_id=user.sub,
+        actor_email=user.email,
         roles=set(user.roles),
         context=documents,
     )

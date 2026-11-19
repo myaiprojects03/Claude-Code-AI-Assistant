@@ -69,9 +69,34 @@ class SendEmail(Tool):
                 "Not sent: only send to an address the user has typed. Ask them "
                 "for the recipient's email."
             )
+        if ctx.channel == "internal" and not await _allowed_recipient(ctx, args.to):
+            # Phase 7 finding: drafts are built from confidential documents, so they may only
+            # go to the firm or to a client this person can see, never a personal address.
+            raise ToolRejected(
+                "Not sent: internal documents can only be emailed to our own domain or to "
+                "a client you have access to. Show the draft so they can send it themselves."
+            )
         return Planned(
             [OutboxSpec("email.send", {"to": args.to, "subject": args.subject, "body": args.body})]
         )
+
+
+async def _allowed_recipient(ctx: ToolContext, to: str) -> bool:
+    from sqlalchemy import select
+
+    from assistant.models import ClientAccess, Company
+    from assistant.settings import get_settings
+
+    domain = to.rsplit("@", 1)[-1].lower()
+    if domain in get_settings().firm_email_domains_list:
+        return True
+    q = select(Company.domain).where(Company.domain.is_not(None))
+    if not ({"admin", "manager"} & set(ctx.roles)):
+        q = q.join(ClientAccess, ClientAccess.company_id == Company.id).where(
+            ClientAccess.staff_email == (ctx.actor_email or "").lower()
+        )
+    client_domains = {d.lower() for d in (await ctx.session.execute(q)).scalars()}
+    return domain in client_domains
 
 
 class NotifyTeamArgs(BaseModel):

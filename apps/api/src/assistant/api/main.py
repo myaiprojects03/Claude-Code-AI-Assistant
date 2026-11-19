@@ -8,7 +8,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from assistant import alerts, metrics
-from assistant.api.routes import admin, chat, dashboard, health
+from assistant.api.routes import admin, chat, dashboard, health, privacy
+from assistant.api.security import BodyLimit, SecurityHeaders
 from assistant.db import dispose_engine, init_engine
 from assistant.integrations import TicketAdapter, build_ticketing
 from assistant.kb.embeddings import Embedder, build_embedder
@@ -57,7 +58,16 @@ def create_app(
         yield
         await dispose_engine()
 
-    app = FastAPI(title="AI Assistant API", version="0.1.0", lifespan=lifespan)
+    dev = settings.app_env == "dev"
+    # Interactive API docs only in dev: in production they map the attack surface for free.
+    app = FastAPI(
+        title="AI Assistant API",
+        version="0.1.0",
+        lifespan=lifespan,
+        docs_url="/docs" if dev else None,
+        redoc_url="/redoc" if dev else None,
+        openapi_url="/openapi.json" if dev else None,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.allowed_origins_list,
@@ -94,10 +104,15 @@ def create_app(
         response.headers["x-request-id"] = request_id
         return response
 
+    # Outermost: every response (errors included) gets the security headers, and oversized
+    # bodies are refused before any route reads them.
+    app.add_middleware(BodyLimit, max_bytes=settings.max_body_bytes)
+    app.add_middleware(SecurityHeaders, https=not dev)
     app.include_router(health.router)
     app.include_router(chat.router)
     app.include_router(admin.router)
     app.include_router(dashboard.router)
+    app.include_router(privacy.router)
     return app
 
 

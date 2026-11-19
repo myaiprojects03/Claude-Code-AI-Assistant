@@ -113,6 +113,7 @@ class Orchestrator:
         text: str,
         *,
         actor_id: str | None = None,
+        actor_email: str | None = None,
         roles: set[str] | None = None,
         context: ContextProvider | None = None,
     ) -> TurnResult:
@@ -179,6 +180,7 @@ class Orchestrator:
             channel=conv.channel,
             verified=conv.verified,
             actor_id=actor_id,
+            actor_email=actor_email,
             roles=roles or set(),
         )
         tools_used: list[str] = []

@@ -333,11 +333,8 @@ async def conversations(
     if status_:
         stmt = stmt.where(Conversation.status == status_)
     if q:
-        like = f"%{q.lower()}%"
-        stmt = stmt.where(
-            func.lower(func.coalesce(Contact.name, "")).like(like)
-            | func.lower(func.coalesce(Contact.email, "")).like(like)
-        )
+        # Same escaping as leads/bookings: "%" and "_" are literal (Phase 7 finding).
+        stmt = stmt.where(_matches(q, Contact.name, Contact.email))
     rows = (await session.execute(stmt)).all()
     return [
         ConversationRow(

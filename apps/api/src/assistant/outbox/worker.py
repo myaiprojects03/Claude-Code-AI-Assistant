@@ -7,6 +7,7 @@ Rows stuck in `processing` (worker crashed mid-effect) are re-queued after a tim
 import asyncio
 import random
 import signal
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -201,6 +202,25 @@ class OutboxWorker:
         metrics.OUTBOX_PENDING.set(counts.get(OutboxStatus.pending, 0))
         metrics.OUTBOX_DEAD.set(counts.get(OutboxStatus.dead, 0))
 
+    async def run_retention(self) -> dict[str, int]:
+        """GDPR retention: anonymise or delete data past its period (privacy.py)."""
+        from assistant import audit, privacy
+        from assistant.api.routes.privacy import retention_policy
+
+        async with self.sm() as s:
+            stats = await privacy.apply_retention(s, retention_policy())
+            if any(stats.values()):
+                audit.record(
+                    s,
+                    actor_type="system",
+                    actor_id="retention",
+                    action="privacy.retention",
+                    **stats,
+                )
+            await s.commit()
+        log.info("privacy.retention", **stats)
+        return stats
+
     async def run_once(self) -> int:
         await self.reclaim_stuck()
         batch = await self.claim()
@@ -211,12 +231,16 @@ class OutboxWorker:
     async def run_forever(self, stop: asyncio.Event) -> None:
         log.info("outbox.worker_started", handlers=sorted(self.handlers))
         gauge_tick = 0
+        next_retention = 0.0
         while not stop.is_set():
             try:
                 n = await self.run_once()
                 gauge_tick += 1
                 if gauge_tick % 15 == 0:
                     await self.update_gauges()
+                if time.monotonic() >= next_retention:
+                    await self.run_retention()
+                    next_retention = time.monotonic() + self.s.retention_interval_s
             except Exception as e:
                 log.exception("outbox.loop_error")
                 await alerts.send_alert("critical", "Outbox worker loop error", error=str(e))

@@ -93,6 +93,24 @@ class Settings(BaseSettings):
     # Public web chat
     allowed_origins: str = "http://localhost:5173,http://localhost:3000"
     rate_limit_per_minute: int = 20  # per client IP on public chat endpoints
+    # Phase 7 hardening
+    # Only behind a reverse proxy you control: otherwise anyone can fake X-Forwarded-For
+    # and dodge the per-IP rate limit.
+    trust_proxy_headers: bool = False
+    internal_rate_limit_per_minute: int = 12  # per staff member, knowledge assistant
+    max_body_bytes: int = 256 * 1024  # larger request bodies are refused (413)
+    # /metrics: open in dev; outside dev only from this machine or with this bearer token.
+    metrics_token: str = ""
+    # The knowledge assistant may only email these domains, plus the domains of clients the
+    # person has access to (stops confidential documents being sent to personal addresses).
+    firm_email_domains: str = "acme.example"  # the (fictional) firm's own domain
+    # GDPR retention (days). Applied by the outbox worker every few hours.
+    retention_conversation_days: int = 365  # visitor chats with nothing still open
+    retention_internal_chat_days: int = 180  # staff knowledge-assistant chats
+    retention_code_days: int = 7  # verification-code records after they expire
+    retention_outbox_days: int = 90  # sent or failed message records
+    retention_audit_days: int = 730  # audit log (ISO 27001 evidence)
+    retention_interval_s: int = 6 * 3600
 
     @model_validator(mode="after")
     def _secure_outside_dev(self) -> "Settings":
@@ -107,6 +125,10 @@ class Settings(BaseSettings):
     @property
     def internal_llm_chain_list(self) -> list[str]:
         return [p.strip() for p in self.internal_llm_chain.split(",") if p.strip()]
+
+    @property
+    def firm_email_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.firm_email_domains.split(",") if d.strip()]
 
     @property
     def allowed_origins_list(self) -> list[str]:

@@ -11,6 +11,7 @@ free and open-source tools. See [docs/phase-0](docs/phase-0/README.md) for the d
 - ~~Phase 4: voice agent~~ (removed from scope)
 - [x] Phase 5: internal knowledge assistant ([docs](docs/phase-5/README.md)): local Ollama model, permission-filtered search over confidential documents, cited sources, drafting with a fact guard, leak tests. 193 tests passing; internal evals 10/10 on qwen2.5 3B and 7B.
 - [x] Phase 6: staff dashboard ([docs](docs/phase-6/README.md)): Keycloak SSO, overview with conversion, escalation and unanswered-topic analytics, handovers, conversations, leads, bookings, tickets, settings and website-content editors, knowledge assistant, client access, handover ownership (take, reassign, resolve), form-based rule editors with previews, search, live records in the knowledge assistant, live Jira statuses. 222 tests passing.
+- [x] Phase 7: security, compliance and hardening ([docs](docs/phase-7/README.md)): access-control and prompt-injection testing on every channel, 11 security fixes, dependency and secret scans, UK GDPR export/erasure/retention, audit log viewer, ISO 27001 control map, failure drills and load tests. 252 tests passing.
 
 ## Quick start (Windows)
 

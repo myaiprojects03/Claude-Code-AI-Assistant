@@ -465,3 +465,17 @@ export const previewRules = (key: string, value: unknown, sample: unknown) =>
     method: "POST",
     body: JSON.stringify({ value, sample }),
   });
+
+/** Download an API response (e.g. a privacy export) as a file, with the staff token. */
+export async function apiDownload(path: string, filename: string) {
+  const t = await token();
+  const res = await fetch(`${API}${path}`, { headers: t ? { Authorization: `Bearer ${t}` } : {} });
+  if (!res.ok) throw new ApiError(res.status, res.statusText);
+  const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? filename;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}

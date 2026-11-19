@@ -75,6 +75,8 @@ export function Shell({ children }: { children: ReactNode }) {
     { to: "/content", label: "Website content", roles: ["admin", "manager"], count: overview.data?.unanswered_30d },
     { to: "/settings", label: "Settings", roles: ["admin", "manager"] },
     { to: "/access", label: "Client access", roles: ["admin"] },
+    { to: "/privacy", label: "Privacy requests", roles: ["admin"] },
+    { to: "/audit", label: "Audit log", roles: ["admin"] },
   ];
   const link = (i: NavItem) => (
     <NavLink key={i.to} to={i.to} end={i.to === "/"} className={({ isActive }) => (isActive ? "active" : "")}>

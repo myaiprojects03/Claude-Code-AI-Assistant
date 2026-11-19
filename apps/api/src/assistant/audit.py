@@ -16,6 +16,11 @@ def record(
     **details: Any,
 ) -> None:
     """Add an audit row to the current transaction (caller commits)."""
+    from assistant.auth import current_staff
+
+    user = current_staff.get()
+    if actor_type == "staff" and user is not None and user.sub == actor_id:
+        details.setdefault("actor_name", user.display_name)
     session.add(
         AuditLog(
             actor_type=actor_type,

@@ -18,7 +18,7 @@ from tests.conftest import requires_db
 
 pytestmark = requires_db
 reg = ToolRegistry(default_tools())
-EMAIL = {"to": "a@example.com", "subject": "Hi", "body": "Hello"}
+EMAIL = {"to": "a@acme.example", "subject": "Hi", "body": "Hello"}
 
 
 async def new_conversation(sm, channel="internal") -> uuid.UUID:

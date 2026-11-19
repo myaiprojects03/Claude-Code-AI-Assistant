@@ -116,6 +116,16 @@ class ConfigDraft(BaseModel):
     value: Any
 
 
+def _check_writable(key: str) -> None:
+    """Only the settings the dashboard offers can be written. The assistants' system prompts
+    hold the safety rules and change through code review (Phase 7 finding: the API used to
+    accept any key, so an admin token could rewrite them)."""
+    from assistant.api.routes.dashboard import EDITABLE_CONFIG
+
+    if key not in EDITABLE_CONFIG and not key.startswith(public_kb.CONTENT_PREFIX):
+        raise HTTPException(403, f"'{key}' can't be changed from the dashboard")
+
+
 def _check_rules(key: str, value: Any) -> Any:
     """Rule settings must match their schema, or the assistant could break on publish."""
     try:
@@ -173,6 +183,7 @@ async def create_config_draft(
     user: StaffUser = Depends(admins),
     session: AsyncSession = Depends(get_session),
 ):
+    _check_writable(key)
     _check_content(key, body.value)
     value = _check_rules(key, body.value)
     row = await config_store.create_draft(session, key, value, user.username or user.sub)
@@ -197,6 +208,7 @@ async def publish_config(
     user: StaffUser = Depends(admins),
     session: AsyncSession = Depends(get_session),
 ):
+    _check_writable(key)
     if key.startswith(public_kb.CONTENT_PREFIX):
         draft = (
             await session.execute(

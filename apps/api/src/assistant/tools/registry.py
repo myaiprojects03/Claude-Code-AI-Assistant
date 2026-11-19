@@ -35,6 +35,7 @@ class ToolContext:
     channel: str
     verified: bool = False
     actor_id: str | None = None
+    actor_email: str | None = None  # staff sign-in email (internal channel)
     roles: set[str] = field(default_factory=set)
 
 

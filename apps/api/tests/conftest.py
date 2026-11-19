@@ -16,8 +16,38 @@ requires_db = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 def _reset_caches():
+    from assistant import ratelimit
+
     alerts._reset_for_tests()
     config_store.clear_cache()
+    ratelimit.reset()  # per-IP counters are in memory: one test's chats mustn't limit the next
+    yield
+
+
+# Real integrations are configured in .env for the running app. Tests must never reach
+# them (Phase 7 finding: a worker test posted to the real Slack webhook on every run).
+OFFLINE = {
+    "slack_notify_webhook_url": "",
+    "slack_alert_webhook_url": "",
+    "ticketing_provider": "local",
+    "jira_base_url": "",
+    "jira_email": "",
+    "jira_api_token": "",
+    "crm_provider": "local",
+    "hubspot_token": "",
+    "calendar_provider": "local",
+    "google_service_account_file": "",
+    "smtp_host": "smtp.invalid",  # nothing listens: email handlers must be faked in tests
+}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_integrations(monkeypatch):
+    from assistant.settings import get_settings
+
+    s = get_settings()
+    for key, value in OFFLINE.items():
+        monkeypatch.setattr(s, key, value)
     yield
 
 

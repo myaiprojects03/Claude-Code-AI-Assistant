@@ -16,17 +16,17 @@ WINDOW_S = 60.0
 
 
 def client_key(request: Request) -> str:
-    # Behind a reverse proxy/tunnel, trust only the first X-Forwarded-For hop it sets.
-    fwd = request.headers.get("x-forwarded-for")
-    if fwd:
-        return fwd.split(",")[0].strip()
+    # X-Forwarded-For is only meaningful when our own proxy (e.g. the Cloudflare tunnel)
+    # sets it. Otherwise anyone can send a fresh fake value per request and never hit the
+    # limit (Phase 7 finding), so by default the connection's own address is used.
+    if get_settings().trust_proxy_headers and (fwd := request.headers.get("x-forwarded-for")):
+        return fwd.split(",")[-1].strip()  # the hop our proxy appended, not the client's
     return request.client.host if request.client else "unknown"
 
 
-async def limit_public(request: Request) -> None:
-    limit = get_settings().rate_limit_per_minute
+def _check(key: str, limit: int) -> None:
     now = time.monotonic()
-    q = _hits[client_key(request)]
+    q = _hits[key]
     while q and now - q[0] > WINDOW_S:
         q.popleft()
     if len(q) >= limit:
@@ -37,6 +37,16 @@ async def limit_public(request: Request) -> None:
             headers={"Retry-After": str(retry)},
         )
     q.append(now)
+
+
+async def limit_public(request: Request) -> None:
+    _check(f"ip:{client_key(request)}", get_settings().rate_limit_per_minute)
+
+
+def limit_staff(sub: str) -> None:
+    """Knowledge-assistant questions per staff member: each runs the local model for up to
+    a minute, so a loop (or a stolen token) could otherwise tie the machine up."""
+    _check(f"staff:{sub}", get_settings().internal_rate_limit_per_minute)
 
 
 def reset() -> None:
