@@ -1,0 +1,79 @@
+# Production front door (Phase 8). Caddy runs natively on Windows (D:\Caddy\caddy.exe),
+# started by scripts/prod.ps1, which sets the {$...} values below.
+#
+# TLS ends at Tailscale Funnel, which forwards:
+#   https://<pc>.<tailnet>.ts.net       -> http://127.0.0.1:8081  (website demo, API, login)
+#   https://<pc>.<tailnet>.ts.net:8443  -> http://127.0.0.1:8082  (staff dashboard)
+# Nothing here listens beyond 127.0.0.1.
+
+{
+	auto_https off
+	admin localhost:2019
+	servers {
+		# Only tailscaled (on this PC) connects; trust its X-Forwarded-For for the visitor IP.
+		trusted_proxies static 127.0.0.1/32 ::1/128
+		client_ip_headers X-Forwarded-For
+	}
+}
+
+(common_headers) {
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		-Server
+	}
+}
+
+(to_backend) {
+	header_up X-Forwarded-For {client_ip}
+	header_up X-Forwarded-Proto {$PUBLIC_SCHEME}
+	header_up X-Forwarded-Host {$PUBLIC_HOST}
+}
+
+# Website demo + chat widget, the API and staff login, on one address.
+http://:8081 {
+	bind 127.0.0.1
+	import common_headers
+
+	# Keycloak's admin console and the master realm never go public (admins use
+	# http://127.0.0.1:8180/auth/admin on this PC). A `handle` runs before a bare `respond`,
+	# so the block has to be a `handle` of its own, listed first.
+	@kc_private path /auth/admin /auth/admin/* /auth/realms/master /auth/realms/master/*
+	handle @kc_private {
+		respond "Not found" 404
+	}
+
+	handle /auth/* {
+		reverse_proxy 127.0.0.1:8180 {
+			import to_backend
+		}
+	}
+
+	# /metrics is never proxied: requests from Caddy look local to the API, which would
+	# otherwise serve them. Only /v1 and the health checks reach the API.
+	@api path /v1/* /healthz /readyz
+	handle @api {
+		reverse_proxy 127.0.0.1:{$API_PORT} {
+			import to_backend
+		}
+	}
+
+	handle {
+		root * "{$SITE_DIR}"
+		header /assistant-chat.js Cache-Control "public, max-age=300"
+		file_server
+	}
+}
+
+# Staff dashboard (single-page app: unknown paths serve index.html).
+http://:8082 {
+	bind 127.0.0.1
+	import common_headers
+	header X-Frame-Options DENY
+
+	root * "{$DASH_DIR}"
+	header /assets/* Cache-Control "public, max-age=31536000, immutable"
+	try_files {path} /index.html
+	file_server
+}

@@ -54,14 +54,14 @@ def _unauthorized(detail: str = "invalid or missing token") -> HTTPException:
 
 
 @lru_cache
-def _jwk_client(issuer: str) -> jwt.PyJWKClient:
-    return jwt.PyJWKClient(
-        f"{issuer}/protocol/openid-connect/certs", cache_keys=True, lifespan=3600
-    )
+def _jwk_client(issuer: str, jwks_url: str = "") -> jwt.PyJWKClient:
+    url = jwks_url or f"{issuer}/protocol/openid-connect/certs"
+    return jwt.PyJWKClient(url, cache_keys=True, lifespan=3600)
 
 
 async def _signing_key(token: str) -> object:
-    client = _jwk_client(get_settings().oidc_issuer)
+    s = get_settings()
+    client = _jwk_client(s.oidc_issuer, s.oidc_jwks_url)
     # PyJWKClient uses blocking urllib; keep it off the event loop.
     return (await asyncio.to_thread(client.get_signing_key_from_jwt, token)).key
 

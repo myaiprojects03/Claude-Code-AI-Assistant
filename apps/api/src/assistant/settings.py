@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -7,13 +8,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Repo root (apps/api/src/assistant/settings.py -> 4 levels up)
 REPO_ROOT = Path(__file__).resolve().parents[4]
 _ROOT_ENV = REPO_ROOT / ".env"
+# Production runs on the same PC as dev: ASSISTANT_ENV_FILE=.env.prod makes it read ONLY that
+# file, so dev's real Slack/Jira settings in .env can never leak into the public demo.
+_ENV_FILES = (
+    (os.environ["ASSISTANT_ENV_FILE"],)
+    if os.environ.get("ASSISTANT_ENV_FILE")
+    else (_ROOT_ENV, ".env")
+)
 
 
 DEV_SECRET = "dev-insecure-secret-change-me-0123456789"
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=(_ROOT_ENV, ".env"), extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILES, extra="ignore")
 
     app_env: str = "dev"
     app_secret: str = DEV_SECRET
@@ -43,12 +51,19 @@ class Settings(BaseSettings):
     # Auth
     oidc_issuer: str = "http://localhost:8080/realms/assistant"
     oidc_audience: str = "assistant-api"
+    # Where to fetch Keycloak's signing keys; blank = {oidc_issuer}/protocol/.../certs. In
+    # production the issuer is the public URL, but the keys are fetched on this machine.
+    oidc_jwks_url: str = ""
     session_token_ttl_s: int = 24 * 3600
 
     # Email
     smtp_host: str = "localhost"
     smtp_port: int = 1025
     smtp_from: str = "assistant@example.test"
+    # Real mail servers (Gmail app password, Brevo): sign in over STARTTLS. Blank = Mailpit.
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = False
 
     # Alerts / notifications
     slack_alert_webhook_url: str = ""

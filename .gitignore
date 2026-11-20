@@ -19,6 +19,7 @@ dist/
 .env
 .env.*
 !.env.example
+!.env.prod.example
 *.age.key
 
 # OS / editors
@@ -29,4 +30,5 @@ Thumbs.db
 .cache/
 apps/api/evals/results/
 logs/
+deploy/
 *.tsbuildinfo

@@ -1,0 +1,87 @@
+{
+  "realm": "assistant",
+  "enabled": true,
+  "displayName": "Acme IT Consulting (demo)",
+  "accessTokenLifespan": 900,
+  "roles": {
+    "realm": [
+      {
+        "name": "admin",
+        "description": "Full access, config publishing"
+      },
+      {
+        "name": "manager",
+        "description": "Views all conversations and analytics"
+      },
+      {
+        "name": "consultant",
+        "description": "Internal assistant, own escalations"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "assistant-dashboard",
+      "name": "Dashboard + internal assistant",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-assistant-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "assistant-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin.dev",
+      "enabled": true,
+      "email": "admin.dev@example.test",
+      "emailVerified": true,
+      "firstName": "Ada",
+      "lastName": "Admin",
+      "realmRoles": [
+        "admin"
+      ]
+    },
+    {
+      "username": "manager.dev",
+      "enabled": true,
+      "email": "manager.dev@example.test",
+      "emailVerified": true,
+      "firstName": "Max",
+      "lastName": "Manager",
+      "realmRoles": [
+        "manager"
+      ]
+    },
+    {
+      "username": "consultant.dev",
+      "enabled": true,
+      "email": "consultant.dev@example.test",
+      "emailVerified": true,
+      "firstName": "Cora",
+      "lastName": "Consultant",
+      "realmRoles": [
+        "consultant"
+      ]
+    }
+  ],
+  "bruteForceProtected": true,
+  "failureFactor": 10,
+  "registrationAllowed": false,
+  "sslRequired": "external"
+}

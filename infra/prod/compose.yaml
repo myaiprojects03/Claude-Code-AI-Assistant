@@ -1,0 +1,52 @@
+# Production stack on this PC (Phase 8). Runs beside the dev stack with its own data and
+# ports, all bound to 127.0.0.1: only Caddy (native, scripts/prod.ps1) is published, through
+# Tailscale Funnel. Values come from .env.prod (see .env.prod.example):
+#   podman-compose --env-file .env.prod -f infra/prod/compose.yaml up -d
+
+name: assistant-prod
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: assistant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: assistant
+    ports: ["127.0.0.1:5434:5432"]
+    volumes:
+      - pgdata-prod:/var/lib/postgresql/data
+      - ./postgres-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U assistant -d assistant"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    # Production mode. TLS ends at Tailscale Funnel; Caddy forwards /auth here.
+    command: ["start", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: assistant
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_HTTP_ENABLED: "true"
+      KC_HTTP_PORT: "8080"
+      KC_HTTP_RELATIVE_PATH: /auth
+      KC_HOSTNAME: ${PUBLIC_URL}/auth
+      KC_PROXY_HEADERS: xforwarded
+      JAVA_OPTS_KC_HEAP: "-XX:MaxRAMPercentage=40"
+    ports: ["127.0.0.1:8180:8080"]
+    volumes:
+      - ./keycloak/realm-assistant.json:/opt/keycloak/data/import/realm-assistant.json:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata-prod:

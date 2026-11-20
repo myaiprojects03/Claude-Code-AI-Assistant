@@ -82,6 +82,11 @@ docs/phase-N/     phase decisions and docs
 - Dashboard: `cd ../web && npm run dev` (http://localhost:3000; port is fixed by the Keycloak
   client). Demo data: `../../.venv/Scripts/assistant-seed --demo`. Theme rules:
   `docs/phase-6/design-system.md` (monochrome, one weight, brightness for emphasis).
+- Production (public demo on this PC): `powershell -File ../../scripts/prod.ps1
+  build|up|status|down|backup|restore-test|funnel-on|funnel-off`. Separate database (5434),
+  Keycloak (8180), API (8001) and settings (`.env.prod`, the only file it reads). Caddy is
+  native at `D:\Caddy`; Tailscale Funnel publishes it. Runbook: `docs/phase-8/runbook.md`.
+  Never run `funnel-on` without the user's OK: it makes the PC's demo public.
 
 ## Conventions
 - Python 3.11+, async everywhere, SQLAlchemy 2 typed models, Pydantic v2, ruff (line length 100).

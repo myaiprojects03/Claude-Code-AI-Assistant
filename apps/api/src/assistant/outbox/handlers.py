@@ -6,6 +6,7 @@ supports de-duplication (email Message-ID, Google event id), shrinking the at-le
 
 import asyncio
 import smtplib
+import ssl
 import uuid
 from collections.abc import Awaitable, Callable
 from email.message import EmailMessage
@@ -44,6 +45,10 @@ __all__ = ["Handler", "PermanentError", "build_handlers"]
 def _send_smtp(msg: EmailMessage) -> None:
     s = get_settings()
     with smtplib.SMTP(s.smtp_host, s.smtp_port, timeout=10) as smtp:
+        if s.smtp_starttls:
+            smtp.starttls(context=ssl.create_default_context())
+        if s.smtp_username:
+            smtp.login(s.smtp_username, s.smtp_password)
         smtp.send_message(msg)
 
 
